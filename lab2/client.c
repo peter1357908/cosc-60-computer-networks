@@ -31,10 +31,6 @@ int join_acknowledged = 0; // 0: not acknowledged; 1: acknowledged.
 pthread_mutex_t quit_lock = PTHREAD_MUTEX_INITIALIZER;
 int quit_necessary = 0; // 0: not necessary; 1: necessary
 
-// just a bit of UI sugar (tells the user to get out of the sender loop)
-pthread_mutex_t terminate_lock = PTHREAD_MUTEX_INITIALIZER;
-int sender_thread_terminated = 0; // 0: sender still running; 1: sender terminated
-
 char const *username;
 int sockfd;
 void *client_sender(void *);
@@ -96,11 +92,27 @@ int main(int argc, char const *argv[])
 			exit(EXIT_FAILURE);
 		} else if (num_char_received == 0) {
 			pthread_mutex_lock(&quit_lock);
-			printf("[Connection terminated; preparing to quit...]\n");
+			printf("[Connection terminated; preparing to quit...]\n"
+					"[(Enter anything if not quitting)]\n");
 			quit_necessary = 1;
+			pthread_mutex_unlock(&quit_lock);
+			
+			// in case the server kicks the client before it can join
+			pthread_mutex_lock(&join_lock);
+			pthread_cond_signal(&join_cvar);
+			pthread_mutex_unlock(&join_lock);
+			
+			break;
+		}
+		
+		// if quit requested (via sender), stop interpreting transmissions
+		pthread_mutex_lock(&quit_lock);
+		if (quit_necessary == 1) {
+			// TODO: will "break;" result in the lock being released?
 			pthread_mutex_unlock(&quit_lock);
 			break;
 		}
+		pthread_mutex_unlock(&quit_lock);
 		
 		transmission_type = parse_transmission(receiver_buffer, &received_username, &received_message, num_char_received);
 		
@@ -108,6 +120,7 @@ int main(int argc, char const *argv[])
 			printf("<%s>: %s\n", received_username, received_message);
 			
 		} else if (transmission_type == DPP_JOIN_TYPE) {
+			// TODO: only process transmissions after join request acknowledged
 			if (strcmp(received_username, username) == 0) {
 				pthread_mutex_lock(&join_lock);
 				printf("[Successfully joined chatroom!]\n");
@@ -118,13 +131,14 @@ int main(int argc, char const *argv[])
 				printf("[<%s> joined chatroom!]\n", received_username);
 			}			
 		} else if (transmission_type == DPP_QUIT_TYPE) {
-			if (strcmp(received_username, username) == 0) {
-				pthread_mutex_lock(&quit_lock);
-				printf("[Gracefully disconnected; preparing to quit...]\n");
-				quit_necessary = 1;
-				pthread_mutex_unlock(&quit_lock);
-				break;
-			}
+			// not necessary: server will terminate connection gracefully
+			// if (strcmp(received_username, username) == 0) {
+				// pthread_mutex_lock(&quit_lock);
+				// printf("[Gracefully disconnected; preparing to quit...]\n");
+				// quit_necessary = 1;
+				// pthread_mutex_unlock(&quit_lock);
+				// break;
+			// }
 			printf("[<%s> quitted chatroom!]\n", received_username);
 		} else if (transmission_type == DPP_UNKNOWN_TYPE) {
 			printf("[Garbo transmission received from server...]\n");
@@ -132,13 +146,6 @@ int main(int argc, char const *argv[])
 			printf("[Garbo return value from parsing... HOW\?!]\n");
 		}
 	}
-	
-	// if the sender is still blocked in fgets()...
-	pthread_mutex_lock(&terminate_lock);
-	if (sender_thread_terminated == 0) {
-		printf("[Enter anything to quit: ]");
-	}
-	pthread_mutex_unlock(&terminate_lock);
 	
 	pthread_join(sender_thread, NULL);
 	printf("[Quitting for real.]\n");
@@ -163,7 +170,7 @@ void *client_sender(void *this_argument_is_useless) {
 	// only allow chatting after join request acknowledged
 	// TODO: should we check for quit_necessary inside?
 	pthread_mutex_lock(&join_lock);
-	while (join_acknowledged == 0) {
+	while (join_acknowledged == 0 && quit_necessary == 0) {
 		pthread_cond_wait(&join_cvar, &join_lock);
 	}
 	pthread_mutex_unlock(&join_lock);
@@ -195,10 +202,6 @@ void *client_sender(void *this_argument_is_useless) {
 			exit(EXIT_FAILURE);
 		}
 	}
-	
-	pthread_mutex_lock(&terminate_lock);
-	sender_thread_terminated = 1;
-	pthread_mutex_unlock(&terminate_lock);
 	
 	return NULL;
 }
