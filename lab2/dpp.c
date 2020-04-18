@@ -42,16 +42,15 @@ int parse_transmission(char *transmission_buffer, char **username_pointer, char 
 	
 	// split the "username" off and locate the "message"
 	delimiter_start_location = strstr(*username_pointer, DPP_DELIMITER);
+	
+	// in case if another set of delimiters are found
 	if (delimiter_start_location != NULL) {
-		if (strcmp(type, DPP_MESSAGE) == 0) {
-			*delimiter_start_location = '\0';
-			*message_pointer = delimiter_start_location + delimiter_length;
-
-			return DPP_MESSAGE_TYPE;
-		} else {
-			// the transmission is not a MSG yet has a second delimiter...
-			return DPP_UNKNOWN_TYPE;
-		}
+		*delimiter_start_location = '\0';
+	}
+	
+	if (strcmp(type, DPP_MESSAGE) == 0) {
+		*message_pointer = delimiter_start_location + delimiter_length;
+		return DPP_MESSAGE_TYPE;
 	} else if (strcmp(type, DPP_JOIN) == 0) {
 		return DPP_JOIN_TYPE;
 	} else if (strcmp(type, DPP_QUIT) == 0) {
