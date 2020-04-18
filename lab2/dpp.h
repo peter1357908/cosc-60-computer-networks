@@ -5,6 +5,9 @@
  * For Dartmouth COSC 60 Lab 2;
  * By Shengsong Gao, 2020.
  */
+ 
+#ifndef _dpp_h
+#define _dpp_h
 
 #define DPP_DELIMITER "::"
 #define DPP_MAX_OVERHEAD 8 // depends on the longest flag and the delimiter
@@ -42,5 +45,8 @@ int build_quit(char *buffer, const char *username);
  * returns the type of the transmission (defined above with "#define")
  */
 int parse_transmission(char *transmission_buffer, char **username_pointer, char **message_pointer, int num_char_received);
+
+// returns 1 if the transmission is a QUIT request, otherwise 0
+int is_quit(char *transmission_buffer);
  
- 
+#endif // _dpp_h

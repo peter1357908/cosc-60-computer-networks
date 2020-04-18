@@ -19,6 +19,7 @@
 #include <string.h>
 #include "dpp.h"
 
+// TODO: share the definitions between server and client...
 #define MAX_MESSAGE_LENGTH 512
 #define MAX_USERNAME_LENGTH 20
 #define BUFFER_SIZE (MAX_MESSAGE_LENGTH + MAX_USERNAME_LENGTH + DPP_MAX_OVERHEAD + 1)
@@ -80,11 +81,11 @@ int main(int argc, char const *argv[])
 		exit(EXIT_FAILURE);
 	}
 	
-	char receiver_buffer[BUFFER_SIZE];
+	char receiver_buffer[BUFFER_SIZE] = {0};
 	char *received_username, *received_message;
 	int transmission_type, num_char_received;
 	
-	// main receiving loop
+	/****** main receiving loop ******/
 	while (1) {
 		num_char_received = recv(sockfd, receiver_buffer, BUFFER_SIZE, 0);
 		if (num_char_received < 0) {
@@ -154,7 +155,8 @@ int main(int argc, char const *argv[])
 }
 
 void *client_sender(void *this_argument_is_useless) {
-	char sender_buffer[BUFFER_SIZE], reading_buffer[MAX_MESSAGE_LENGTH + 1];
+	char sender_buffer[BUFFER_SIZE] = {0};
+	char reading_buffer[MAX_MESSAGE_LENGTH + 1] = {0};
 
 	// first, try to join the chatroom
 	printf("[Trying to join the chatroom...]\n");
@@ -175,7 +177,7 @@ void *client_sender(void *this_argument_is_useless) {
 	}
 	pthread_mutex_unlock(&join_lock);
 	
-	// main sending loop
+	/****** main sending loop ******/
 	while (1) {
 		pthread_mutex_lock(&quit_lock);
 		if (quit_necessary == 1) {

@@ -28,3 +28,7 @@ Please see [here](https://sjcjoosten.nl/etc/ComputerNetworksWiki/index.php/Lab2_
 
 ## Differences among implementations
 
+
+## Notable implementation choices:
+1. Currently, duplicate usernames among the clients are allowed (and not differentiated).
+

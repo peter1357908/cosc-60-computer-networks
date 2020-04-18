@@ -16,8 +16,8 @@ all: client server
 client: client.c dpp.c dpp.h
 	$(CC) $(CFLAGS) -o client client.c dpp.c -lpthread
 	
-server: server.c dpp.c dpp.h
-	$(CC) $(CFLAGS) -o server server.c dpp.c -lpthread
+server: server.c dpp.c dpp.h Queue.c Queue.h
+	$(CC) $(CFLAGS) -o server server.c dpp.c Queue.c -lpthread
 
 test_client: client
 	./client 4242 Peter

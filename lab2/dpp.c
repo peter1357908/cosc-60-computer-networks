@@ -60,6 +60,13 @@ int parse_transmission(char *transmission_buffer, char **username_pointer, char 
 		return DPP_UNKNOWN_TYPE;
 	}
 }
+
+int is_quit(char *transmission_buffer) {
+	if (strncmp(transmission_buffer, DPP_QUIT, strlen(DPP_QUIT)) == 0) {
+		return 1;
+	}
+	return 0;
+}
  
  
  
