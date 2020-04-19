@@ -72,24 +72,24 @@ int main(int argc, char const *argv[])
 	unsigned int addr_len = (unsigned int) sizeof(serv_addr);
 	
 	while (1) {
-		/****** sync'd: accept and create new thread ******/
-		pthread_mutex_lock(&q_lock);
-		
 		new_accepted_sockfd_p = (int *)malloc(sizeof(int));
 		if ((*new_accepted_sockfd_p = accept(serv_sockfd, (struct sockaddr *)&serv_addr, &addr_len)) < 0) {
 			perror("accept() error\n"); 
 			exit(EXIT_FAILURE);
 		}
+		
+		pthread_mutex_lock(&q_lock);
 		enq_q(accepted_sockfd_q, new_accepted_sockfd_p);
+		pthread_mutex_unlock(&q_lock);
 		
 		new_thread_p = (pthread_t *)malloc(sizeof(pthread_t));
 		if (pthread_create(new_thread_p, NULL, server_receiver, new_accepted_sockfd_p) != 0) {
 			perror("pthread_create() error\n");
 			exit(EXIT_FAILURE);
 		}
-		enq_q(server_receiver_thread_q, new_thread_p);
 		
-		pthread_mutex_unlock(&q_lock);
+		// TODO: may need to be synchronized
+		enq_q(server_receiver_thread_q, new_thread_p);
 	}
 	
 	// TODO: enable server to quit gracefully (free queues, join threads, etc.)
@@ -107,14 +107,9 @@ void *server_receiver(void *accepted_sockfd_vp) {
 		num_char_received = recv(accepted_sockfd, receiver_buffer, BUFFER_SIZE, 0);
 		// if received anything, just mindlessly broadcast them first
 		if (num_char_received > 0) {
-			printf("num_char_received = %d\n"
-					"receiver_buffer = %.9s\n", num_char_received, receiver_buffer);
 			pthread_mutex_lock(&q_lock);
 			memmove(broadcast_buffer, receiver_buffer, num_char_received);
-			printf("memmove() finished, broadcast_buffer = %.9s\n", broadcast_buffer);
 			broadcast_length = num_char_received;
-			printf("length:%d\n", broadcast_length);
-			
 			iterate_q(accepted_sockfd_q, broadcast_callback);
 			pthread_mutex_unlock(&q_lock);
 			

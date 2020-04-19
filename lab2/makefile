@@ -26,4 +26,4 @@ test_server: server
 	./server 4242
 
 clean:
-	rm -f client client_alt
+	rm -f client server
