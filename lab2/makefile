@@ -19,10 +19,10 @@ client: client.c dpp.c dpp.h
 server: server.c dpp.c dpp.h Queue.c Queue.h
 	$(CC) $(CFLAGS) -o server server.c dpp.c Queue.c -lpthread
 
-test_client: client
+test_client: clean client
 	./client 4242 Peter
 	
-test_server: server
+test_server: clean server
 	./server 4242
 
 clean:
