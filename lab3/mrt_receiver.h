@@ -8,8 +8,8 @@
 #ifndef _mrt_receiver_h
 #define _mrt_receiver_h
 
-#define MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_SIZE * 5)
+#define MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_LENGTH * 5)
 
-int mrt_close();
+int mrt_open();
 
 #endif // _mrt_receiver_h

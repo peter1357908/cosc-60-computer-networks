@@ -5,7 +5,9 @@
  * By Shengsong Gao, April 2020.
  */
 
-#include "mrt.h"
+#include <string.h>
+
+#include "mrt.h" 
 
 const int unkn_type = MRT_UNKN;
 const int rcon_type = MRT_RCON;

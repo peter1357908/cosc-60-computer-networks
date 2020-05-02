@@ -14,6 +14,6 @@
  * expects the str to be NULL-terminated
  */
 unsigned long
-hash(unsigned char *str);
+hash(char *str);
 
 #endif // _utilities_h

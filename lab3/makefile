@@ -15,6 +15,9 @@ ALL = sender receiver
 
 all: $(ALL)
 
+receiver_module: mrt_receiver.c $(OPAQUE_C) $(OPAQUE_H)
+	$(CC) $(CFLAGS) -o receiver_module mrt_receiver.c $(OPAQUE_C) -lpthread
+
 # remember that libraries must follow the objects and sources...
 sender: sender.c mrt_sender.c $(OPAQUE_C) $(OPAQUE_H)
 	$(CC) $(CFLAGS) -o sender sender.c mrt_sender.c $(OPAQUE_C) -lpthread

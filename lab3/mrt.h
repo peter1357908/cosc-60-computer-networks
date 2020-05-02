@@ -23,25 +23,23 @@
 #define MRT_HASH_LENGTH           8     // unsigned long
 #define MRT_TYPE_LENGTH           4     // int
 #define MRT_FRAGMENT_LENGTH       4     // int
-#define MRT_ID_LENGTH             4     // int
 #define MRT_WINDOWSIZE_LENGTH     4     // int
-#define MRT_HEADER_SIZE           (MRT_HASH_LENGTH + MRT_TYPE_LENGTH + MRT_FRAGMENT_LENGTH + MRT_ID_LENGTH + MRT_WINDOWSIZE_LENGTH)
+#define MRT_HEADER_LENGTH         (MRT_HASH_LENGTH + MRT_TYPE_LENGTH + MRT_FRAGMENT_LENGTH + MRT_WINDOWSIZE_LENGTH)
 
 #define MRT_TYPE_LOCATION        MRT_HASH_LENGTH
 #define MRT_FRAGMENT_LOCATION    (MRT_TYPE_LOCATION + MRT_TYPE_LENGTH)
-#define MRT_ID_LOCATION          (MRT_FRAGMENT_LOCATION + MRT_FRAGMENT_LENGTH)
-#define MRT_WINDOWSIZE_LOCATION  (MRT_ID_LOCATION + MRT_ID_LENGTH)
-#define MRT_PAYLOAD_LOCATION     MRT_HEADER_SIZE
+#define MRT_WINDOWSIZE_LOCATION  (MRT_FRAGMENT_LOCATION + MRT_FRAGMENT_LENGTH)
+#define MRT_PAYLOAD_LOCATION     MRT_HEADER_LENGTH
 
-#define MAX_UDP_PAYLOAD_SIZE            65507 // IPv4: 65507, IPv6: 65527
-#define MAX_MRT_PAYLOAD_SIZE            (MAX_UDP_PAYLOAD_SIZE - MRT_SIZE)
+#define MAX_UDP_PAYLOAD_LENGTH   65507 // IPv4: 65507, IPv6: 65527
+#define MAX_MRT_PAYLOAD_LENGTH   (MAX_UDP_PAYLOAD_LENGTH - MRT_HEADER_LENGTH)
 
 
 // variables initialized in mrt.c; for memmove() use
 const int unkn_type;
 const int rcon_type;
 const int acon_type;
-const int data_type
+const int data_type;
 const int adat_type;
 const int rcls_type;
 const int acls_type;
