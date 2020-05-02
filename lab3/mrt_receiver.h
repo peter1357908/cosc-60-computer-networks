@@ -10,7 +10,7 @@
 
 #include "Queue.h"  // q_t
 
-#define MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_LENGTH * 5)
+#define RECEIVER_MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_LENGTH * 5)
 
 // will create the main thread that handles all incoming transmissions
 int mrt_open();

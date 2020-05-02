@@ -31,9 +31,11 @@
 #define MRT_WINDOWSIZE_LOCATION  (MRT_FRAGMENT_LOCATION + MRT_FRAGMENT_LENGTH)
 #define MRT_PAYLOAD_LOCATION     MRT_HEADER_LENGTH
 
-#define MAX_UDP_PAYLOAD_LENGTH   65507 // IPv4: 65507, IPv6: 65527
+#define MAX_UDP_PAYLOAD_LENGTH   65507  // IPv4: 65507, IPv6: 65527
+#define MAX_UDP_OVERHEAD         65535 - MAX_UDP_PAYLOAD_LENGTH
 #define MAX_MRT_PAYLOAD_LENGTH   (MAX_UDP_PAYLOAD_LENGTH - MRT_HEADER_LENGTH)
 
+#define PORT_NUMBER              4242   // currently fixed (for loopback) 
 
 // variables initialized in mrt.c; for memmove() use
 const int unkn_type;

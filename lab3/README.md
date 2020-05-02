@@ -12,9 +12,7 @@
 
 #### Handling high latency, packet loss, and silent disconnection:
 
-* before the connection is established (first ACON not sent yet), the sender is responsible for keep retrying to establish connection (keep sending RCONs and expecting an ACON).
-
-* After the connection is established (first ACON sent), while the window size is lower than max MRT payload size, the receiver is responsible for maintaining the connection (by keep sending duplicate ADATs and expecting empty DATAs without incrementing the fragment number), otherwise the sender is responsible for maintaining the connection (by keep sending meaningful DATAs and expecting meaningful ADATs)
+* the sender is always responsible for *actively* maintaining the connection. At first, the sender keeps sending RCONs until an ACON arrives; then the sender will keep sending DATAs - if the advertised window size is too small or the sender's own buffer has too little space, the DATAs will be empty, otherwise DATA containing payloads will be sent. The receiver, on the other hand, passively maintains the connection by responding to every transmission from the sender (likely sending duplicate acknowledgements).
 
 ## Lab question responses
 1. How I tested against packet loss
@@ -48,8 +46,6 @@
 
 ## Notable implementation choices:
 
-* designed for one-time data transfer (receive the entire data and be done)
-
 * only supports the loopback interface (consequently, connections/senders are identified by their port number alone)
 
 * receiver performs clean-up on a successful transmission by tricking the checker into thinking that a timeout happened (assuming that RCLS is only sent upon receiving the final ADAT, the remaining window size must be greater than one MRT payload, thus triggering the `else` clause... in fact, the receiver can just do nothing and let the connection timeout by itself).
@@ -66,3 +62,4 @@
 * any reason to make `mrt_accept()` and `mrt_receive()` families non-blocking?
 * store `last_frag` instead of `next_frag` in the `sender_t`.
 * use `CVAR` instead of relying on waking up repeatedly from `sleep()` (what was the term for such a bad practice?).
+* verify in sender that the received message is indeed from the target receiver

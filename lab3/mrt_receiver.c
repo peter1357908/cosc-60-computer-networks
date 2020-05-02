@@ -17,7 +17,6 @@
 #include "Queue.h"
 #include "utilities.h" // hash()
 
-#define PORT_NUMBER             4242
 #define CHECKER_PERIOD          2000                  // milliseconds
 #define ACCEPT1_PERIOD          500
 #define RECEIVE1_PERIOD         500
@@ -26,7 +25,7 @@
 /****** declarations ******/
 typedef struct sender {
   struct sockaddr_in addr;
-  char buffer[MAX_WINDOW_SIZE];
+  char buffer[RECEIVER_MAX_WINDOW_SIZE];
   int bytes_unread;
   int next_frag;
   int inactive_time;
@@ -38,12 +37,12 @@ void *checker(void *sender_vp);
 int sender_matcher(void *sender_vp, void *port_vp);
 void probe_for_one(void *id_vp, void *target_id_vpp);
 void build_acon(int initial_frag);
-void build_adat(char *buffer, int received_frag, int curr_window_size);
+void build_adat(int received_frag, int curr_window_size);
 void build_acls();
 
 /****** global variables ******/
 unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
-int initial_window_size = MAX_WINDOW_SIZE;
+int initial_window_size = RECEIVER_MAX_WINDOW_SIZE;
 int rece_sockfd;
 
 int should_close = 0;
@@ -55,7 +54,7 @@ pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 
 pthread_t main_thread;
 char incoming_buffer[MAX_UDP_PAYLOAD_LENGTH + 1]; // +1 for NULL-termination for hash()
-char outgoing_buffer[MAX_UDP_PAYLOAD_LENGTH + 1]; // +1 for NULL-termination for hash()
+char outgoing_buffer[MRT_HEADER_LENGTH + 1]; // +1 for NULL-termination for hash()
 
 /****** functions ******/
 
@@ -125,7 +124,11 @@ unsigned short mrt_accept1() {
    */
   pthread_mutex_lock(&q_lock);
     enq_q(connected_senders_q, curr_sender);
-  
+
+    /* TODO: be semantically correct and use a different buffer
+     * than the main outgoing_buffer (currently this should still
+     * work, though)
+     */
     build_acon(curr_sender->next_frag - 1);
     sendto(rece_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
       0, (const struct sockaddr *)(&(curr_sender->addr)), 
@@ -248,12 +251,12 @@ void mrt_close() {
  * and handled here.
  */
 void *main_handler(void *_null) {
-  int bytes_received;
-  sender_t *curr_sender;
+  int bytes_received = 0;
+  sender_t *curr_sender = NULL;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
-  unsigned short port_holder;
+  unsigned short port_holder = 0;
   unsigned long hash_holder = 0;
-  int type_holder=0, frag_holder=0;
+  int type_holder = 0, frag_holder = 0;
 
   // the main loop; processes all the incoming transmissions
   while (1) {
@@ -325,7 +328,7 @@ void *main_handler(void *_null) {
             /* buffer the transmitted payload if there is enough free space
              * AND it is not out of order;
              */
-            int curr_window_size = MAX_WINDOW_SIZE - curr_sender->bytes_unread;
+            int curr_window_size = RECEIVER_MAX_WINDOW_SIZE - curr_sender->bytes_unread;
             int payload_size = bytes_received - MRT_HEADER_LENGTH;
             if (curr_window_size >= payload_size && curr_sender->next_frag == frag_holder) {
               char *next_free_slot = (curr_sender->buffer) + curr_sender->bytes_unread;
@@ -333,17 +336,17 @@ void *main_handler(void *_null) {
               curr_sender->bytes_unread += payload_size;
               curr_sender->next_frag += 1;
               curr_window_size -= payload_size;
-              build_adat(outgoing_buffer, frag_holder, curr_window_size);
-              sendto(rece_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
-                0, (const struct sockaddr *)(&addr_holder), 
-                addr_len);
             }
             // else the packet must be dropped (out of order / buffer space)
 
             /* either way, sender just proved that he's still connected,
-             * so reset the inactivity counter
+             * so reset the inactivity counter and replies with ADAT
              */
             curr_sender->inactive_time = 0;
+            build_adat(frag_holder, curr_window_size);
+            sendto(rece_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
+                    0, (const struct sockaddr *)(&addr_holder), 
+                    addr_len);
           }
           // else the sender is sending data without being connected
           // do nothing (drop the packet)
@@ -388,7 +391,7 @@ void *main_handler(void *_null) {
     delete_q(connected_senders_q, free); // could use free(q) directly
   pthread_mutex_unlock(&q_lock);
 
-  // TODO: signal all blocked mrt_receive1()... or let them wake up from sleep?
+  close(rece_sockfd);
   return NULL;
 }
 
@@ -399,28 +402,15 @@ void *main_handler(void *_null) {
  */
 void *checker(void *sender_vp) {
   sender_t *sender_p = (sender_t *)sender_vp;
-  int curr_window_size, curr_frag;
-  char buffer[MRT_HEADER_LENGTH + 1];
 
   while (1) {
     pthread_mutex_lock(&q_lock);
-      curr_frag = sender_p->next_frag - 1;
-      curr_window_size = MAX_WINDOW_SIZE - sender_p->bytes_unread;
-      if (curr_window_size < MAX_MRT_PAYLOAD_LENGTH) {
-        // the receiver is responsible for maintaining connection
-        sender_p->inactive_time = 0;
-        build_adat(buffer, curr_frag, curr_window_size);
-        sendto(rece_sockfd, buffer, MRT_HEADER_LENGTH,  
-          0, (const struct sockaddr *)(&(sender_p->addr)), 
-          addr_len);
-      } else {
-        // else the sender is responsible; increment inactivity counter
-        sender_p->inactive_time += CHECKER_PERIOD;
-        // if it would sleep past the threshold, go BOOM
-        if (sender_p->inactive_time > TIMEOUT_THRESHOLD) {
-          pthread_mutex_unlock(&q_lock);
-          break;
-        }
+      // else the sender is responsible; increment inactivity counter
+      sender_p->inactive_time += CHECKER_PERIOD;
+      // if it would sleep past the threshold, go BOOM
+      if (sender_p->inactive_time > TIMEOUT_THRESHOLD) {
+    pthread_mutex_unlock(&q_lock);
+        break;
       }
     pthread_mutex_unlock(&q_lock);
     sleep(CHECKER_PERIOD);
@@ -485,15 +475,14 @@ void build_acon(int initial_frag) {
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }
 
-// buffer must be at least (MRT_HEADER_LENGTH + 1) in length
-void build_adat(char *buffer, int received_frag, int curr_window_size) {
-  memmove(buffer + MRT_TYPE_LOCATION, &adat_type, MRT_TYPE_LENGTH);
-  memmove(buffer + MRT_FRAGMENT_LOCATION, &received_frag, MRT_FRAGMENT_LENGTH);
-  memmove(buffer + MRT_WINDOWSIZE_LOCATION, &curr_window_size, MRT_WINDOWSIZE_LENGTH);
+void build_adat(int received_frag, int curr_window_size) {
+  memmove(outgoing_buffer + MRT_TYPE_LOCATION, &adat_type, MRT_TYPE_LENGTH);
+  memmove(outgoing_buffer + MRT_FRAGMENT_LOCATION, &received_frag, MRT_FRAGMENT_LENGTH);
+  memmove(outgoing_buffer + MRT_WINDOWSIZE_LOCATION, &curr_window_size, MRT_WINDOWSIZE_LENGTH);
   
-  buffer[MRT_HEADER_LENGTH] = '\0';
-  unsigned long hash_holder = hash(buffer + MRT_HASH_LENGTH);
-  memmove(buffer, &hash_holder, MRT_HASH_LENGTH);
+  outgoing_buffer[MRT_HEADER_LENGTH] = '\0';
+  unsigned long hash_holder = hash(outgoing_buffer + MRT_HASH_LENGTH);
+  memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }
 
 void build_acls() {
