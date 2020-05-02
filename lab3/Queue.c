@@ -86,11 +86,11 @@ void *deq_q(q_t *queue) {
 
 /* -------- unconventional queue functions -------- */
 
-void iterate_q(q_t *queue, void (*itemfunc)(void *item)) {
+void iterate_q(q_t *queue, void (*itemfunc)(void *item, void *argument), void *argument) {
 	if (queue == NULL) { return; }
 	qnode_t *currNode = queue->head;
 	while(currNode != NULL) {
-		(*itemfunc)(currNode->item);
+		(*itemfunc)(currNode->item, argument);
 		currNode = currNode->node_behind;
 	}
 }

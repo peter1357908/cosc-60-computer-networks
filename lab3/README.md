@@ -56,9 +56,13 @@
 
 * once a connection closes, the receiver can no longer access the corresponding buffer (it gets garbage-collected alongside the other sender info)
 
-## structural TODOs:
+## Structural TODOs / TOTHINKs (not part of the write-up):
 
+* protect against more bad use cases such as repeatedly calling `mrt_open()`
 * consider using MSG_CONFIRM flags for sending acknowledgements
 * consider sending acknowldedgements in new threads (minor concurrency)
 * consider creating a lock for each sender rather than for the entire pair of queues
 * keep the buffer of a closed connection in memory if the buffer still has unread bytes... until...?
+* any reason to make `mrt_accept()` and `mrt_receive()` families non-blocking?
+* store `last_frag` instead of `next_frag` in the `sender_t`.
+* use `CVAR` instead of relying on waking up repeatedly from `sleep()` (what was the term for such a bad practice?).

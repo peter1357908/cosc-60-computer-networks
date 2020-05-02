@@ -19,13 +19,15 @@
 
 #define PORT_NUMBER             4242
 #define CHECKER_PERIOD          2000                  // milliseconds
-#define TIMEOUT_THRESHOLD       (CHECKER_PERIOD * 5)  // milliseconds
+#define ACCEPT1_PERIOD          500
+#define RECEIVE1_PERIOD         500
+#define TIMEOUT_THRESHOLD       (CHECKER_PERIOD * 5)
 
 /****** declarations ******/
 typedef struct sender {
   struct sockaddr_in addr;
   char buffer[MAX_WINDOW_SIZE];
-  int num_unread_bytes;
+  int bytes_unread;
   int next_frag;
   int inactive_time;
   pthread_t *checker_thread; // checks for inactivity
@@ -34,6 +36,7 @@ typedef struct sender {
 void *main_handler(void *_null);
 void *checker(void *sender_vp);
 int sender_matcher(void *sender_vp, void *port_vp);
+void probe_for_one(void *id_vp, void *target_id_vpp);
 void build_acon(int initial_frag);
 void build_adat(char *buffer, int received_frag, int curr_window_size);
 void build_acls();
@@ -96,20 +99,153 @@ int mrt_open() {
   return MRT_SUCCESS;
 }
 
-// // will return the port number of the accepted connection
-// unsigned int mrt_accept1() {
-//   if (curr_sender->checker_thread == NULL) {
-//     // TODO: what if pthread_create() fails?
-//     pthread_create(curr_sender->checker_thread, NULL, checker, curr_sender);
-//   }
-// }
+/* accepts a connection request and returns the source port number. 
+ * If no requests exist yet, will block and wait until one shows up,
+ * and then accept it.
+ */
+// TODO: use CVAR instead of spurious sleep wakeups
+// TODO: malloc the ID and return a pointer instead?
+unsigned short mrt_accept1() {
+  sender_t *curr_sender = NULL;
+  while (1) {
+    pthread_mutex_lock(&q_lock);
+      curr_sender = deq_q(pending_senders_q);
+      if (curr_sender == NULL) {
+    pthread_mutex_unlock(&q_lock);
+        sleep(ACCEPT1_PERIOD); 
+      } else {
+    pthread_mutex_unlock(&q_lock);
+        break;
+      }
+  }
+  /* note that the two queues are created in one atomic action
+   * so breaking out of the above while loop mean that both queues
+   * are already initialized correctly... and so are other variables
+   * used below; they are initialized before the two queues.
+   */
+  pthread_mutex_lock(&q_lock);
+    enq_q(connected_senders_q, curr_sender);
+  
+    build_acon(curr_sender->next_frag - 1);
+    sendto(rece_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
+      0, (const struct sockaddr *)(&(curr_sender->addr)), 
+      addr_len);
 
+    // as soon the ACON is sent, start the timeout checker thread
+    // TODO: what if pthread_create() fails? FATAL? Retry-worthy?
+    pthread_create(curr_sender->checker_thread, NULL, checker, curr_sender);
+  pthread_mutex_unlock(&q_lock);
+  
+  // TODO: dangerously asynchronous? Does it matter?
+  return curr_sender->addr.sin_port;
+}
+
+/* Will accepted all the pending connections requests
+ * and return a queue of their IDs (port numbers, as of now).
+ * Does not wait for a request to show up; will return an 
+ * empty queue if there are no pending requests.
+ *
+ * The caller is responsible for freeing the (q_t *) as well
+ * all the IDs (malloc'd unsigned short).
+ */
+q_t *mrt_accept_all() {
+  q_t *accepted_q = make_q();
+  sender_t *curr_sender;
+  unsigned short *port_p = NULL;
+
+  while (1) {
+    pthread_mutex_lock(&q_lock);
+      curr_sender = peek_q(pending_senders_q);
+      if (curr_sender == NULL) {
+    pthread_mutex_unlock(&q_lock);
+      break;
+    } else {
+    pthread_mutex_unlock(&q_lock);
+      port_p = malloc(sizeof(unsigned short));
+      *port_p = mrt_accept1();
+      enq_q(accepted_q, port_p);
+    }
+  }
+
+  return accepted_q;
+}
+
+/* Moves to `buffer` at least 1 byte of data and as much as specified
+ * in `len` as long as the connection remains open. Will block and wait
+ * until there is data.
+ *
+ * Returns the number of bytes written.
+ * Returns 0 if the connection closes while blocked waiting for data
+ * Returns -1 if the call is spurious (connection not accepted yet,
+ * mrt_open() not even called yet, etc.)
+ */
+ // TODO: use CVAR instead of spurious sleep wakeups
+int mrt_receive1(unsigned short *id_p, void *buffer, int len) {
+  sender_t *curr_sender = NULL;
+  pthread_mutex_lock(&q_lock);
+    curr_sender = get_item_q(connected_senders_q, sender_matcher, id_p);
+    if (curr_sender == NULL) { 
+  pthread_mutex_unlock(&q_lock);
+      return -1; 
+    }
+  
+  while(1) {
+    pthread_mutex_lock(&q_lock);
+      // get the sender again to ensure the connection is still valid
+      curr_sender = get_item_q(connected_senders_q, sender_matcher, id_p);
+      if (curr_sender == NULL) {
+        // the sender is NULL now... after not being NULL once...
+    pthread_mutex_unlock(&q_lock);
+        return 0;    
+      }
+
+      // the connection remains; now either sleep or perform the copy
+      if (curr_sender->bytes_unread <= 0) {
+    pthread_mutex_unlock(&q_lock);
+        sleep(RECEIVE1_PERIOD);
+      } else {
+        int bytes_unread = curr_sender->bytes_unread;
+        int bytes_read = (len < bytes_unread) ? len : bytes_unread;
+        memmove(buffer, curr_sender->buffer, bytes_read);
+        // relocate the unread bytes
+        if (bytes_read < bytes_unread) {
+          int bytes_remaining = bytes_unread - bytes_read;
+          // note that this relies on memmove() to handle the overlapping
+          memmove(curr_sender->buffer, (curr_sender->buffer) + bytes_read, bytes_remaining);
+          curr_sender->bytes_unread = bytes_remaining;
+    pthread_mutex_unlock(&q_lock);
+          return bytes_read;
+        }
+      }
+  }
+}
+
+/* Returns the first connection that has some unread bytes
+ * found in input queue.
+ *
+ * Expects a queue of IDs; returns either a pointer to a copy of that ID
+ * or NULL (no satisfying ID found; does not wait for one).
+ *
+ * The user is responsible for freeing the returned copy.
+ */
+unsigned short *mrt_probe(q_t *probe_q) {
+  unsigned short *target_id_p = NULL;
+  iterate_q(probe_q, probe_for_one, &target_id_p);
+  return target_id_p;
+}
+
+/* the actual logic is handled in main_handler()...
+ */
+void mrt_close() {
+  pthread_mutex_lock(&close_lock);
+    should_close = 1;
+  pthread_mutex_unlock(&close_lock);
+}
 
 /****** thread functions (unavailable to module users) ******/
 
 /* The main handler; all incoming transmissions will be validated
  * and handled here.
- *
  */
 void *main_handler(void *_null) {
   int bytes_received;
@@ -129,6 +265,7 @@ void *main_handler(void *_null) {
     pthread_mutex_lock(&close_lock);
       if (should_close == 1) {
         printf("Breaking from main loop because should_close\n");
+    pthread_mutex_unlock(&close_lock);
         break;
       }
     pthread_mutex_unlock(&close_lock);
@@ -158,7 +295,7 @@ void *main_handler(void *_null) {
             curr_sender = get_item_q(connected_senders_q, sender_matcher, &port_holder);
             if (curr_sender == NULL) {
                 curr_sender = malloc(sizeof(sender_t));
-                curr_sender->num_unread_bytes = 0;
+                curr_sender->bytes_unread = 0;
                 curr_sender->next_frag = frag_holder + 1;
                 curr_sender->inactive_time = 0;
                 curr_sender->checker_thread = NULL;
@@ -168,8 +305,6 @@ void *main_handler(void *_null) {
             // if it is already connected, send a (duplicate) ACON
             else {
               build_acon(frag_holder);
-              // TODO: use MSG_CONFIRM flag?
-              // TODO: send via another thread?
               sendto(rece_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
                 0, (const struct sockaddr *)(&addr_holder), 
                 addr_len);
@@ -190,12 +325,12 @@ void *main_handler(void *_null) {
             /* buffer the transmitted payload if there is enough free space
              * AND it is not out of order;
              */
-            int curr_window_size = MAX_WINDOW_SIZE - curr_sender->num_unread_bytes;
+            int curr_window_size = MAX_WINDOW_SIZE - curr_sender->bytes_unread;
             int payload_size = bytes_received - MRT_HEADER_LENGTH;
             if (curr_window_size >= payload_size && curr_sender->next_frag == frag_holder) {
-              char *next_free_slot = (curr_sender->buffer) + curr_sender->num_unread_bytes;
+              char *next_free_slot = (curr_sender->buffer) + curr_sender->bytes_unread;
               memmove(next_free_slot, incoming_buffer + MRT_PAYLOAD_LOCATION, payload_size);
-              curr_sender->num_unread_bytes += payload_size;
+              curr_sender->bytes_unread += payload_size;
               curr_sender->next_frag += 1;
               curr_window_size -= payload_size;
               build_adat(outgoing_buffer, frag_holder, curr_window_size);
@@ -250,7 +385,7 @@ void *main_handler(void *_null) {
       pthread_cancel(*(curr_sender->checker_thread));
       free(curr_sender);
     }
-    delete_q(connected_senders_q, free);
+    delete_q(connected_senders_q, free); // could use free(q) directly
   pthread_mutex_unlock(&q_lock);
 
   // TODO: signal all blocked mrt_receive1()... or let them wake up from sleep?
@@ -270,7 +405,7 @@ void *checker(void *sender_vp) {
   while (1) {
     pthread_mutex_lock(&q_lock);
       curr_frag = sender_p->next_frag - 1;
-      curr_window_size = MAX_WINDOW_SIZE - sender_p->num_unread_bytes;
+      curr_window_size = MAX_WINDOW_SIZE - sender_p->bytes_unread;
       if (curr_window_size < MAX_MRT_PAYLOAD_LENGTH) {
         // the receiver is responsible for maintaining connection
         sender_p->inactive_time = 0;
@@ -312,6 +447,28 @@ int sender_matcher(void *sender_vp, void *port_vp) {
   unsigned int *port_p = (unsigned int *)port_vp;
 
   return (sender_p->addr.sin_port == *port_p);
+}
+
+/* callback for mrt_probe, expects to take in a pointer to an
+ * NULL unsigned short pointer, which would be set to a valid pointer
+ * if a match is found.
+ */
+void probe_for_one(void *id_vp, void *target_id_vpp) {
+  unsigned short **target_id_pp = (unsigned short **)target_id_vpp;
+  unsigned short *target_id_p = *target_id_pp;
+  if (target_id_p != NULL) {
+    unsigned short *id_p = (unsigned short *)id_vp;
+    sender_t *curr_sender;
+    pthread_mutex_lock(&q_lock);
+      curr_sender = get_item_q(connected_senders_q, sender_matcher, id_p);
+      if (curr_sender != NULL && curr_sender->bytes_unread > 0) {
+        target_id_p = malloc(sizeof(unsigned short));
+        *target_id_p = *id_p;
+      }
+      // otherwise a mismatch; do nothing.
+    pthread_mutex_unlock(&q_lock);
+  }
+  // otherwise the target is already found; do nothing.
 }
 
 // the build_x() functions assume that memmove() always succeeds

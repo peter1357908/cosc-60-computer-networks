@@ -35,7 +35,7 @@ void *deq_q(q_t *queue);
 /* -------- unconventional queue functions -------- */
 
 // does nothing for a NULL queue.
-void iterate_q(q_t *queue, void (*itemfunc)(void *item));
+void iterate_q(q_t *queue, void (*itemfunc)(void *item, void *argument), void *argument);
 
 
 // returns NULL if the queue is NULL or it's empty.
