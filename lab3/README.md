@@ -66,8 +66,10 @@
 
 * acknowledge by bytes instead of fragments
 * use `CVAR` instead of relying on waking up repeatedly from `sleep()` (what was the term for such a bad practice?).
-* better mutex usage / management (instead of relying on the `q_lock` to do most of the work)
+* better mutex usage / management for receiver (instead of relying on the `q_lock` to do most of the work)
+* better mutex usage / management for sender (HMM need to implement a lock that ensures that a connection_t is not freed... it's more than putting the locks outside the connection_t struct...)
 * make a sender window struct... the current approach is too unwieldy
+
 
 #### not-so-breaking changes:
 

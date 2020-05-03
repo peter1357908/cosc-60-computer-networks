@@ -20,6 +20,7 @@
 #define RCON_PERIOD               EXPECTED_RTT * 2
 #define EMPTY_DATA_PERIOD         EXPECTED_RTT * 2
 #define MRT_SEND_PERIOD           EXPECTED_RTT * 2
+#define MRT_DISCONNECT_PERIOD     EXPECTED_RTT * 4
 #define RESEND_TIMEOUT_THRESHOLD  EMPTY_DATA_PERIOD * 3
 #define CLOSE_TIMEOUT_INCREMENT   EMPTY_DATA_PERIOD * 2 // timeout increment
 #define CLOSE_TIMEOUT_THRESHOLD   CLOSE_TIMEOUT_INCREMENT * 3
@@ -193,7 +194,7 @@ int mrt_send(int id, char *buffer, int len) {
     pthread_mutex_lock(&q_lock);
     conn_p = get_item_q(connections_q, connection_matcher, &id);
     if (conn_p == NULL) {
-      // the sender is NULL now... after not being NULL once...
+      // the conn_p is NULL now... after not being NULL once...
       pthread_mutex_unlock(&q_lock);
       printf("sender %d: connection dropped before all data are sent.\n", id);
       // TODO: anyway to tell how many bytes are acknowledged?
@@ -243,7 +244,55 @@ int mrt_send(int id, char *buffer, int len) {
  * (unless signaled to close by timeout). Blocking.
  */
 void mrt_disconnect(int id) {
+  connection_t *conn_p = NULL;
+  pthread_mutex_lock(&q_lock);
+  conn_p = get_item_q(connections_q, connection_matcher, &id);
+  if (conn_p == NULL) {
+    pthread_mutex_unlock(&q_lock);
+    printf("mrt_disconnect(): spurious call with id=%d.\n", id);
+    return; 
+  }
+  pthread_mutex_unlock(&q_lock);
 
+  // only proceed if no more data buffered...!
+  while(1) {
+    // get it again to ensure the connection is still valid
+    pthread_mutex_lock(&q_lock);
+    conn_p = get_item_q(connections_q, connection_matcher, &id);
+    if (conn_p == NULL) {
+      // the conn_p is NULL now... after not being NULL once...
+      pthread_mutex_unlock(&q_lock);
+      printf("sender %d: connection dropped before own RCLS gets sent.\n", id);
+      // TODO: anyway to tell how many bytes are acknowledged?
+      return;  
+    }
+    pthread_mutex_unlock(&q_lock);
+
+    pthread_mutex_lock(&(conn_p->buffer_lock));
+    // HOW CLEVER! IT ALL CAME TOGETHER!
+    if (conn_p->last_payload_index < 0) {
+      pthread_mutex_unlock(&(conn_p->buffer_lock));
+      break;
+    }
+    pthread_mutex_unlock(&(conn_p->buffer_lock));
+    sleep(MRT_DISCONNECT_PERIOD);
+  }
+
+  // NOW send RCLS...
+  pthread_mutex_lock(&(conn_p->outgoing_lock));
+  build_rcls(conn_p->outgoing_buffer);
+  sendto(conn_p->send_sockfd, conn_p->outgoing_buffer, 
+              MRT_HASH_LENGTH + MRT_TYPE_LENGTH,  
+              0, (const struct sockaddr *)(&(conn_p->rece_addr)), 
+              addr_len);
+  pthread_mutex_unlock(&(conn_p->outgoing_lock));
+  
+  /* TODO: do nothing here, maybe? Since handler also does this
+   * trick when receiving an ACLS...
+   */
+  pthread_mutex_lock(&(conn_p->timeout_lock));
+  conn_p->inactive_time = CLOSE_TIMEOUT_THRESHOLD + 1;
+  pthread_mutex_unlock(&(conn_p->timeout_lock));
 }
 
 /****** thread functions (unavailable to module users) ******/
