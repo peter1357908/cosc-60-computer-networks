@@ -29,7 +29,7 @@ typedef struct sender {
   int bytes_unread;
   int next_frag;
   int inactive_time;
-  pthread_t *checker_thread; // checks for inactivity
+  pthread_t checker_thread; // checks for inactivity
 } sender_t;
 
 void *main_handler(void *_null);
@@ -136,7 +136,7 @@ unsigned short mrt_accept1() {
 
     // as soon the ACON is sent, start the timeout checker thread
     // TODO: what if pthread_create() fails? FATAL? Retry-worthy?
-    pthread_create(curr_sender->checker_thread, NULL, checker, curr_sender);
+    pthread_create(&(curr_sender->checker_thread), NULL, checker, curr_sender);
   pthread_mutex_unlock(&q_lock);
   
   // TODO: dangerously asynchronous? Does it matter?
@@ -210,12 +210,18 @@ int mrt_receive1(unsigned short *id_p, void *buffer, int len) {
         int bytes_unread = curr_sender->bytes_unread;
         int bytes_read = (len < bytes_unread) ? len : bytes_unread;
         memmove(buffer, curr_sender->buffer, bytes_read);
-        // relocate the unread bytes
+        // TODO: simplify the following if-else?
         if (bytes_read < bytes_unread) {
+          // if there are bytes remaining:
           int bytes_remaining = bytes_unread - bytes_read;
           // note that this relies on memmove() to handle the overlapping
           memmove(curr_sender->buffer, (curr_sender->buffer) + bytes_read, bytes_remaining);
           curr_sender->bytes_unread = bytes_remaining;
+    pthread_mutex_unlock(&q_lock);
+          return bytes_read;
+        } else {
+          // if all bytes were read:
+          curr_sender->bytes_unread = 0;
     pthread_mutex_unlock(&q_lock);
           return bytes_read;
         }
@@ -261,7 +267,7 @@ void *main_handler(void *_null) {
   // the main loop; processes all the incoming transmissions
   while (1) {
     bytes_received = recvfrom(rece_sockfd, incoming_buffer,
-      MAX_MRT_PAYLOAD_LENGTH, 0, (struct sockaddr *)(&addr_holder),
+      MAX_UDP_PAYLOAD_LENGTH, 0, (struct sockaddr *)(&addr_holder),
       &addr_len);
 
     // before processing, check if close is flagged
@@ -301,7 +307,6 @@ void *main_handler(void *_null) {
                 curr_sender->bytes_unread = 0;
                 curr_sender->next_frag = frag_holder + 1;
                 curr_sender->inactive_time = 0;
-                curr_sender->checker_thread = NULL;
                 memmove(&(curr_sender->addr), &addr_holder, addr_len);
                 enq_q(pending_senders_q, curr_sender);
             }
@@ -343,7 +348,7 @@ void *main_handler(void *_null) {
              * so reset the inactivity counter and replies with ADAT
              */
             curr_sender->inactive_time = 0;
-            build_adat(frag_holder, curr_window_size);
+            build_adat(curr_sender->next_frag - 1, curr_window_size);
             sendto(rece_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
                     0, (const struct sockaddr *)(&addr_holder), 
                     addr_len);
@@ -356,6 +361,9 @@ void *main_handler(void *_null) {
       case MRT_RCLS :
         pthread_mutex_lock(&q_lock);
           curr_sender = get_item_q(connected_senders_q, sender_matcher, &port_holder);
+          /* note that RCLS is only sent upon receiving the final ADAT,
+           * so there is no need to check/use the fragment number here.
+           */
           if (curr_sender != NULL) {
             // trick the checker into doing clean-up
             curr_sender->inactive_time = TIMEOUT_THRESHOLD;
@@ -368,7 +376,7 @@ void *main_handler(void *_null) {
             /* else the sender is trying to disconnect without being connected;
             * in that case, just try to remove it from the queue...
             */
-            pop_item_q(pending_senders_q, sender_matcher, &port_holder);
+            free(pop_item_q(pending_senders_q, sender_matcher, &port_holder));
           }
         pthread_mutex_unlock(&q_lock);
         break;
@@ -385,7 +393,7 @@ void *main_handler(void *_null) {
   pthread_mutex_lock(&q_lock);
     delete_q(pending_senders_q, free);
     while((curr_sender = (sender_t *)deq_q(connected_senders_q)) != NULL) {
-      pthread_cancel(*(curr_sender->checker_thread));
+      pthread_cancel(curr_sender->checker_thread);
       free(curr_sender);
     }
     delete_q(connected_senders_q, free); // could use free(q) directly
@@ -405,7 +413,6 @@ void *checker(void *sender_vp) {
 
   while (1) {
     pthread_mutex_lock(&q_lock);
-      // else the sender is responsible; increment inactivity counter
       sender_p->inactive_time += CHECKER_PERIOD;
       // if it would sleep past the threshold, go BOOM
       if (sender_p->inactive_time > TIMEOUT_THRESHOLD) {
@@ -488,7 +495,7 @@ void build_adat(int received_frag, int curr_window_size) {
 void build_acls() {
   memmove(outgoing_buffer + MRT_TYPE_LOCATION, &acls_type, MRT_TYPE_LENGTH);
   
-  outgoing_buffer[MRT_TYPE_LENGTH] = '\0';
+  outgoing_buffer[MRT_HASH_LENGTH + MRT_TYPE_LENGTH] = '\0';
   unsigned long hash_holder = hash(outgoing_buffer + MRT_HASH_LENGTH);
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }

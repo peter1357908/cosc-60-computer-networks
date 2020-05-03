@@ -8,6 +8,4 @@
 #ifndef _mrt_sender_h
 #define _mrt_sender_h
 
-#define SENDER_MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_LENGTH * 10)
-
 #endif // _mrt_sender_h
