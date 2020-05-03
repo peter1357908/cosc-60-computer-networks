@@ -17,9 +17,6 @@
 #define MRT_RCLS 5
 #define MRT_ACLS 6
 
-#define MRT_ERROR     -78
-#define MRT_SUCCESS   -42
-
 #define MRT_HASH_LENGTH           8     // unsigned long
 #define MRT_TYPE_LENGTH           4     // int
 #define MRT_FRAGMENT_LENGTH       4     // int
@@ -51,6 +48,5 @@ const int data_type;
 const int adat_type;
 const int rcls_type;
 const int acls_type;
-
 
 #endif // _mrt_h

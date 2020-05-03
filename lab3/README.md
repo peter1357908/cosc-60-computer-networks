@@ -64,6 +64,7 @@
 
 * acknowledge by bytes instead of fragments
 * use `CVAR` instead of relying on waking up repeatedly from `sleep()` (what was the term for such a bad practice?).
+* better mutex usage / management (instead of relying on the `q_lock` to do most of the work)
 * make a sender window struct... the current approach is too unwieldy
 
 #### not-so-breaking changes:
@@ -71,14 +72,15 @@
 * protect against more bad use cases such as repeatedly calling `mrt_open()`
 * consider using MSG_CONFIRM flags for sending acknowledgements
 * consider sending acknowldedgements in new threads (minor concurrency)
-* consider creating a lock for each sender rather than for the entire pair of queues
 * keep the buffer of a closed connection in memory if the buffer still has unread bytes... until...?
 * store `last_frag` instead of `next_frag` in the `sender_t`.
 * verify in sender that the received message is indeed from the target receiver
 * verify all received info (even given same hash, same source, etc. E.g. the received fragment number must be within valid range)
 * use circular buffer (or other efficient ones) instead of relying on memmove()
-* stop indenting for mutex pairs... it hurts me. I hurt myself.
+* stop indenting for mutex pairs... it hurts me. I hurt myself. In the receiver module...
 
 #### TOTHINKs
 
 * any reason to make `mrt_accept()` and `mrt_receive()` families non-blocking?
+
+* any reason to create a new socket for each connection in the sender module?

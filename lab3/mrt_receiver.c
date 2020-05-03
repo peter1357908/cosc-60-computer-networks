@@ -58,14 +58,16 @@ char outgoing_buffer[MRT_HEADER_LENGTH + 1]; // +1 for NULL-termination for hash
 
 /****** functions ******/
 
-// will create the main thread that handles all incoming transmissions
+/* will create the main thread that handles all incoming transmissions
+ * returns -1 upon any error and 0 upon success.
+ */
 int mrt_open(unsigned int port_number) {
   /****** initializing socket and receiver address ******/
   rece_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (rece_sockfd < 0)
   {
     perror("rece_sockfd = socket() error\n");
-    return MRT_ERROR;
+    return -1;
   }
 
   struct sockaddr_in rece_addr = {0};
@@ -77,7 +79,7 @@ int mrt_open(unsigned int port_number) {
   if (bind(rece_sockfd, (struct sockaddr *)&rece_addr, addr_len) < 0)
   {
     perror("bind(rece_sockfd) error\n");
-    return MRT_ERROR;
+    return -1;
   }
 
   /****** initiating the main handler ******/
@@ -86,16 +88,16 @@ int mrt_open(unsigned int port_number) {
     connected_senders_q = make_q();
     if (pending_senders_q == NULL || connected_senders_q == NULL) {
       perror("make_q() returned NULL\n");
-      return MRT_ERROR;
+      return -1;
     }
   pthread_mutex_unlock(&q_lock);
 
   if (pthread_create(&main_thread, NULL, main_handler, NULL) != 0) {
     perror("pthread_create(main_thread) error\n");
-    return MRT_ERROR;
+    return -1;
   }
   
-  return MRT_SUCCESS;
+  return 0;
 }
 
 /* accepts a connection request and returns a pointer to a copy of

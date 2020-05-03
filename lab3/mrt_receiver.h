@@ -12,7 +12,9 @@
 
 #define RECEIVER_MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_LENGTH * 5)
 
-// will create the main thread that handles all incoming transmissions
+/* will create the main thread that handles all incoming transmissions
+ * returns -1 upon any error and 0 upon success.
+ */
 int mrt_open(unsigned int port_number);
 
 /* accepts a connection request and returns a pointer to a copy of

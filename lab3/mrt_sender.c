@@ -24,97 +24,122 @@
 #define MAX_PAYLOADS_BUFFERABLE   10
 
 /****** declarations ******/
+typedef struct connection {
+  int id;
+  struct sockaddr_in rece_addr;
 
-void *main_handler(void *_null);
-void *main_sender(void *_null);
-void *checker(void *_null);
-void build_rcon();
-void build_data_empty();
-void build_data(int payload_index, int len);
-void build_rcls();
+  /* note that the two arrays below only have valid elements in index
+  * up to the last_payload_index (should not access anything beyond it)
+  */
+  int last_payload_index; // cannot go over MAX_PAYLOADS_BUFFERABLE
+  char sender_buffer[MAX_MRT_PAYLOAD_LENGTH * MAX_PAYLOADS_BUFFERABLE];
+  int num_bytes_buffered[MAX_PAYLOADS_BUFFERABLE];
+  
+  int receiver_window_size;
+  /* always 1 lower than oldest buffered fragment;
+   * initially -1, and set to 0 upon first ACON to indict a connection
+   * is formed.
+   */
+  int last_acknowledged_frag;
+
+  /* assumes that the first frag is number 0 and is already acknowledged
+   * before being used (after the first ACON, thus beginning with 0)
+   */
+  int last_sent_frag;
+
+  int inactive_time;
+
+  int should_close;
+
+  pthread_t handler_thread, sender_thread, checker_thread;
+
+  char incoming_buffer[MRT_HEADER_LENGTH + 1]; // +1 for NULL-termination for hash()
+  char outgoing_buffer[MAX_UDP_PAYLOAD_LENGTH + 1];
+
+  pthread_mutex_t lock;
+} connection_t;
+
+void *handler(void *conn_p);
+void *sender(void *conn_p);
+void *checker(void *conn_p);
+void build_rcon(char *outgoing_buffer);
+void build_data_empty(char *outgoing_buffer);
+void build_data(connection_t *conn_p, int payload_index, int len);
+void build_rcls(char *outgoing_buffer);
 
 /****** global variables ******/
 unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
 int send_sockfd;
-struct sockaddr_in rece_addr = {0};
+int next_id = 0;
+int initial_frag = 0;
 
-unsigned short *id_p = NULL; // indicative of whether a connection is formed
-pthread_mutex_t id_lock = PTHREAD_MUTEX_INITIALIZER;
-
-int receiver_window_size = 0;
-int last_acknowledged_frag = 0; // always 1 lower than oldest buffered payload
-pthread_mutex_t receiver_lock = PTHREAD_MUTEX_INITIALIZER;
-
-int inactive_time = 0;
-pthread_mutex_t timeout_lock = PTHREAD_MUTEX_INITIALIZER;
-
-int should_close = 0;
-pthread_mutex_t close_lock = PTHREAD_MUTEX_INITIALIZER;
-
-/* only changed in sender_thread; no mutex needed
- *
- * assumes that the first frag is number 0 and is already acknowledged
- * before being used (after the first ACON, thus beginning with 0)
- */
-int last_sent_frag = 0;
-
-/* note that the two arrays below only have valid elements in index
- * up to the last_payload_index (should not access anything beyond it)
- */
-int last_payload_index = -1; // cannot go over MAX_PAYLOADS_BUFFERABLE
-char sender_buffer[MAX_MRT_PAYLOAD_LENGTH * MAX_PAYLOADS_BUFFERABLE];
-int num_bytes_buffered[MAX_PAYLOADS_BUFFERABLE];
-pthread_mutex_t buffer_lock = PTHREAD_MUTEX_INITIALIZER;
-
-pthread_t handler_thread, sender_thread, checker_thread;
-char incoming_buffer[MRT_HEADER_LENGTH + 1]; // +1 for NULL-termination for hash()
-char outgoing_buffer[MAX_UDP_PAYLOAD_LENGTH + 1]; // +1 for NULL-termination for hash()
-pthread_mutex_t outgoing_lock = PTHREAD_MUTEX_INITIALIZER;
+q_t *connections_q = NULL;
+pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /****** functions ******/
 
-/* returns a pointer to the connection ID; the caller is
- * responsible for freeing it.
+/* returns the connection ID (int; positive)
+ * returns -1 upon any error and 0 upon success
+ * will block until the connection is established
+ *
+ * the `s_addr` should have the same format as
+ * `(struct sockaddr_in).sin_addr.s_addr`
+ * `s_addr` will be put inside `htonl()` before use
  */
-unsigned short *mrt_connect() {
-  /****** initializing socket and receiver address ******/
-  send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-  if (send_sockfd < 0)
-  {
-    perror("send_sockfd = socket() error\n");
-    return NULL;
-  }
+int mrt_connect(unsigned short port_number, unsigned long s_addr) {
+  /****** initializing the module if not done so yet ******/
+  pthread_mutex_lock(&q_lock);
+  if (connections_q == NULL) {
+    connections_q = make_q();
+    if (connections_q == NULL) {
+      perror("make_q() failed\n");
+      return -1;
+    }
 
-  rece_addr.sin_family = AF_INET;
-  rece_addr.sin_port = htons(PORT_NUMBER);
-  rece_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (send_sockfd < 0) {
+      perror("send_sockfd = socket() error\n");
+      return -1;
+    }
+  }
+  pthread_mutex_unlock(&q_lock);
+  
+  /****** initialize a new connection struct and queue it ******/
+  connection_t *curr_conn = connection_t_init(port_number, s_addr);
+  if (curr_conn == NULL) {
+    perror ("connection_t_init() failed\n");
+    return -1;
+  }
+  
+  pthread_mutex_lock(&q_lock);
+  enq_q(connections_q, curr_conn);
+  pthread_mutex_unlock(&q_lock);
 
   /****** just keep trying to connect to server... ******/
 
   // create the handler thread first (or else ACON cannot be handled)
-  if (pthread_create(&handler_thread, NULL, main_handler, NULL) != 0) {
-    perror("pthread_create(main_thread) error\n");
-    return NULL;
+  if (pthread_create(&(currconn->handler_thread), NULL, handler, currconn) != 0) {
+    perror("pthread_create(handler) error\n");
+    return -1;
   }
  
   while(1) {
-    pthread_mutex_lock(&id_lock);
-      if (id_p != NULL) {
-        pthread_mutex_unlock(&id_lock);
-        break;
-      }
-    pthread_mutex_unlock(&id_lock);
-    
-    pthread_mutex_lock(&outgoing_lock);
-      build_rcon();
-      sendto(send_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
-            0, (const struct sockaddr *)(&rece_addr), 
-            addr_len);
-    pthread_mutex_lock(&outgoing_lock);
+    pthread_mutex_lock(&(curr_conn->lock));
+    if (curr_conn->id != -1) {
+      pthread_mutex_unlock(&(curr_conn->lock));
+      break;
+    }
+
+    build_rcon(curr_conn->outgoing_buffer);
+    sendto(send_sockfd, curr_conn->outgoing_buffer,
+          MRT_HASH_LENGTH + MRT_TYPE_LENGTH + MRT_FRAGMENT_LENGTH  
+          0, (const struct sockaddr *)(&(curr_conn->rece_addr)), 
+          addr_len);
+    pthread_mutex_unlock(&(curr_conn->lock));
     sleep(RCON_PERIOD);
   }
   
-  return id_p;
+  return id;
 }
 
 /* returns the number of bytes successfully sent (acknowledged).
@@ -142,7 +167,7 @@ void mrt_disconnect(){
 /* The main handler; all incoming transmissions will be validated
  * and handled here.
  */
-void *main_handler(void *_null) {
+void *handler(void *conn_p) {
   int num_bytes_received = 0;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
   unsigned long hash_holder = 0;
@@ -186,7 +211,7 @@ void *main_handler(void *_null) {
         // TODO: what if pthread_create() fails?
         pthread_mutex_lock(&id_lock);
           if (id_p == NULL) {
-            pthread_create(&sender_thread, NULL, main_sender, NULL);
+            pthread_create(&sender_thread, NULL, sender, NULL);
             pthread_create(&checker_thread, NULL, checker, NULL);
             id_p = malloc(sizeof(unsigned short));
             *id_p = addr_holder.sin_port;
@@ -263,7 +288,7 @@ void *main_handler(void *_null) {
  * else:
  *    send the next payload in the buffer
  */
-void *main_sender(void *_null) {
+void *sender(void *conn_p) {
   int resend_time = 0;
 
   while (1) {
@@ -324,7 +349,7 @@ void *main_sender(void *_null) {
  * received). Just keeps incrementing the inactivity counter until
  * the connection needs to be dropped...
  */
-void *checker(void *_null) {
+void *checker(void *conn_p) {
   while (1) {
     pthread_mutex_lock(&timeout_lock);
       inactive_time += CLOSE_TIMEOUT_INCREMENT;
@@ -346,9 +371,55 @@ void *checker(void *_null) {
 
 /****** helper functions (unavailable to module users) ******/
 
-// the build_x() functions assume that memmove() always succeeds
-void build_rcon() {
-  int initial_frag = 0;
+/* initialize a new connection struct and returns its pointer
+ * the caller is responsible for freeing it.
+ */
+connection_t *connection_t_init(unsigned short port_number, unsigned long s_addr) {
+  connection_t *connection_p = calloc(1, sizeof(connection_t));
+
+  if (connection_p == NULL) { return NULL }
+
+  if (pthread_mutex_init(&(connection_p->lock), NULL) != 0) { return NULL }
+
+  connection_p->id = next_id++;
+  
+  connection_p->rece_addr.sin_family = AF_INET;
+  connection_p->rece_addr.sin_port = htons(port_number);
+  connection_p->rece_addr.sin_addr.s_addr = htonl(s_addr);
+
+  connection_p->last_payload_index = -1;
+  
+  connection_p->receiver_window_size = 0;
+  connection_p->last_acknowledged_frag = -1;
+
+  connection_p->last_sent_frag = 0;
+
+  connection_p->inactive_time = 0;
+
+  connection_p->should_close = 0;
+
+  return connection_p;
+}
+
+/* returns 1 if the connection's id matches the input id;
+ * returns 0 otherwise.
+ *
+ * designed to be used as a Queue module callback function
+ */
+int connection_matcher(void *connection_vp, void *id_vp) {
+  connection_t *connection_p = (connection_t *)connection_vp;
+  int *id_p = (int *)id_vp;
+
+  if (connection_p->id == *id_p) {
+    return 1;
+  }
+  return 0;
+}
+
+/* the build_x() functions assume that memmove() always succeeds
+ * and need to be inside the respective connection's mutex pair
+ */
+void build_rcon(char *outgoing_buffer) {
   memmove(outgoing_buffer + MRT_TYPE_LOCATION, &rcon_type, MRT_TYPE_LENGTH);
   memmove(outgoing_buffer + MRT_FRAGMENT_LOCATION, &initial_frag, MRT_FRAGMENT_LENGTH);
   
@@ -357,7 +428,7 @@ void build_rcon() {
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }
 
-void build_data_empty() {
+void build_data_empty(char *outgoing_buffer) {
   // choose a fake_frag such that the sender will treat it as droppable
   int fake_frag = -1;
   memmove(outgoing_buffer + MRT_TYPE_LOCATION, &data_type, MRT_TYPE_LENGTH);
@@ -368,8 +439,11 @@ void build_data_empty() {
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }
 
-// expects to be wrapped around a buffer_lock and a receiver_lock
-void build_data(int payload_index, int len) {
+void build_data(connection_t *conn_p, int payload_index, int len) {
+  int last_acknowledged_frag = conn_p->last_acknowledged_frag;
+  char *sender_buffer = conn_p->sender_buffer;
+  char *outgoing_buffer = conn_p->outgoing_buffer;
+
   int sending_frag = last_acknowledged_frag + payload_index + 1;
 
   memmove(outgoing_buffer + MRT_TYPE_LOCATION, &data_type, MRT_TYPE_LENGTH);
@@ -378,7 +452,7 @@ void build_data(int payload_index, int len) {
   memmove(outgoing_buffer + MRT_PAYLOAD_LOCATION, sender_buffer + payload_index * MAX_MRT_PAYLOAD_LENGTH, len);
   
   
-  outgoing_buffer[MRT_HEADER_LENGTH + len] = '\0';
+  outgoing_buffer[MRT_PAYLOAD_LOCATION + len] = '\0';
   unsigned long hash_holder = hash(outgoing_buffer + MRT_HASH_LENGTH);
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }
@@ -386,7 +460,7 @@ void build_data(int payload_index, int len) {
 /* no need to keep track of the fragment number here... only sent
  * after the last expected ADAT is received
  */
-void build_rcls() {
+void build_rcls(char *outgoing_buffer) {
   memmove(outgoing_buffer + MRT_TYPE_LOCATION, &rcls_type, MRT_TYPE_LENGTH);
   
   outgoing_buffer[MRT_HASH_LENGTH + MRT_TYPE_LENGTH] = '\0';
