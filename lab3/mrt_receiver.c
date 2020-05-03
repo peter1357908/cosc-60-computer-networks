@@ -34,7 +34,7 @@ typedef struct sender {
 
 void *main_handler(void *_null);
 void *checker(void *sender_vp);
-int sender_matcher(void *sender_vp, void *port_vp);
+int sender_matcher(void *sender_vp, void *id_vp);
 void probe_for_one(void *id_vp, void *target_id_vpp);
 void build_acon(int initial_frag);
 void build_adat(int received_frag, int curr_window_size);
@@ -59,7 +59,7 @@ char outgoing_buffer[MRT_HEADER_LENGTH + 1]; // +1 for NULL-termination for hash
 /****** functions ******/
 
 // will create the main thread that handles all incoming transmissions
-int mrt_open() {
+int mrt_open(unsigned int port_number) {
   /****** initializing socket and receiver address ******/
   rece_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (rece_sockfd < 0)
@@ -70,7 +70,7 @@ int mrt_open() {
 
   struct sockaddr_in rece_addr = {0};
   rece_addr.sin_family = AF_INET;
-  rece_addr.sin_port = htons(PORT_NUMBER);
+  rece_addr.sin_port = htons(port_number);
   rece_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   /****** binding the socket ******/
@@ -98,13 +98,13 @@ int mrt_open() {
   return MRT_SUCCESS;
 }
 
-/* accepts a connection request and returns the source port number. 
+/* accepts a connection request and returns a pointer to a copy of
+ * its ID struct (currently reusing `sockaddr_in`). 
  * If no requests exist yet, will block and wait until one shows up,
  * and then accept it.
+ * the sender is responsible for freeing the ID struct.
  */
-// TODO: use CVAR instead of spurious sleep wakeups
-// TODO: malloc the ID and return a pointer instead?
-unsigned short mrt_accept1() {
+struct sockaddr_in *mrt_accept1() {
   sender_t *curr_sender = NULL;
   while (1) {
     pthread_mutex_lock(&q_lock);
@@ -137,24 +137,29 @@ unsigned short mrt_accept1() {
     // as soon the ACON is sent, start the timeout checker thread
     // TODO: what if pthread_create() fails? FATAL? Retry-worthy?
     pthread_create(&(curr_sender->checker_thread), NULL, checker, curr_sender);
+    
+    // make a copy of the ID struct
+    struct sockaddr_in *id_p = malloc(addr_len);
+    memmove(id_p, &(curr_sender->addr), addr_len);
+
   pthread_mutex_unlock(&q_lock);
   
   // TODO: dangerously asynchronous? Does it matter?
-  return curr_sender->addr.sin_port;
+  return id_p;
 }
 
 /* Will accepted all the pending connections requests
- * and return a queue of their IDs (port numbers, as of now).
+ * and return a queue of their IDs (struct sockaddr_in, as of now).
  * Does not wait for a request to show up; will return an 
  * empty queue if there are no pending requests.
  *
  * The caller is responsible for freeing the (q_t *) as well
- * all the IDs (malloc'd unsigned short).
+ * all the IDs.
  */
 q_t *mrt_accept_all() {
   q_t *accepted_q = make_q();
   sender_t *curr_sender;
-  unsigned short *port_p = NULL;
+  struct sockaddr_in *id_p = NULL;
 
   while (1) {
     pthread_mutex_lock(&q_lock);
@@ -164,9 +169,8 @@ q_t *mrt_accept_all() {
       break;
     } else {
     pthread_mutex_unlock(&q_lock);
-      port_p = malloc(sizeof(unsigned short));
-      *port_p = mrt_accept1();
-      enq_q(accepted_q, port_p);
+      id_p = mrt_accept1();
+      enq_q(accepted_q, id_p);
     }
   }
 
@@ -183,7 +187,7 @@ q_t *mrt_accept_all() {
  * mrt_open() not even called yet, etc.)
  */
  // TODO: use CVAR instead of spurious sleep wakeups
-int mrt_receive1(unsigned short *id_p, void *buffer, int len) {
+int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len) {
   sender_t *curr_sender = NULL;
   pthread_mutex_lock(&q_lock);
     curr_sender = get_item_q(connected_senders_q, sender_matcher, id_p);
@@ -232,13 +236,13 @@ int mrt_receive1(unsigned short *id_p, void *buffer, int len) {
 /* Returns the first connection that has some unread bytes
  * found in input queue.
  *
- * Expects a queue of IDs; returns either a pointer to a copy of that ID
+ * Expects a queue of IDs; returns either a pointer to a copy of a ID
  * or NULL (no satisfying ID found; does not wait for one).
  *
  * The user is responsible for freeing the returned copy.
  */
-unsigned short *mrt_probe(q_t *probe_q) {
-  unsigned short *target_id_p = NULL;
+struct sockaddr_in *mrt_probe(q_t *probe_q) {
+  struct sockaddr_in *target_id_p = NULL;
   iterate_q(probe_q, probe_for_one, &target_id_p);
   return target_id_p;
 }
@@ -260,7 +264,6 @@ void *main_handler(void *_null) {
   int bytes_received = 0;
   sender_t *curr_sender = NULL;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
-  unsigned short port_holder = 0;
   unsigned long hash_holder = 0;
   int type_holder = 0, frag_holder = 0;
 
@@ -292,16 +295,15 @@ void *main_handler(void *_null) {
     // then check the transmission type and act accordingly
     memmove(&type_holder, incoming_buffer + MRT_TYPE_LOCATION, MRT_TYPE_LENGTH);
     memmove(&frag_holder, incoming_buffer + MRT_FRAGMENT_LOCATION, MRT_FRAGMENT_LENGTH);
-    port_holder = addr_holder.sin_port;
     switch (type_holder) {
       
       case MRT_RCON :
         // if the sender is not queued...
         pthread_mutex_lock(&q_lock);
-          curr_sender = get_item_q(pending_senders_q, sender_matcher, &port_holder);
+          curr_sender = get_item_q(pending_senders_q, sender_matcher, &addr_holder);
           if (curr_sender == NULL) {
             // AND not connected, it must be a new sender... queue it.
-            curr_sender = get_item_q(connected_senders_q, sender_matcher, &port_holder);
+            curr_sender = get_item_q(connected_senders_q, sender_matcher, &addr_holder);
             if (curr_sender == NULL) {
                 curr_sender = malloc(sizeof(sender_t));
                 curr_sender->bytes_unread = 0;
@@ -328,7 +330,7 @@ void *main_handler(void *_null) {
 
       case MRT_DATA :
         pthread_mutex_lock(&q_lock);
-          curr_sender = get_item_q(connected_senders_q, sender_matcher, &port_holder);
+          curr_sender = get_item_q(connected_senders_q, sender_matcher, &addr_holder);
           if (curr_sender != NULL) {
             /* buffer the transmitted payload if there is enough free space
              * AND it is not out of order;
@@ -360,7 +362,7 @@ void *main_handler(void *_null) {
 
       case MRT_RCLS :
         pthread_mutex_lock(&q_lock);
-          curr_sender = get_item_q(connected_senders_q, sender_matcher, &port_holder);
+          curr_sender = get_item_q(connected_senders_q, sender_matcher, &addr_holder);
           /* note that RCLS is only sent upon receiving the final ADAT,
            * so there is no need to check/use the fragment number here.
            */
@@ -376,7 +378,7 @@ void *main_handler(void *_null) {
             /* else the sender is trying to disconnect without being connected;
             * in that case, just try to remove it from the queue...
             */
-            free(pop_item_q(pending_senders_q, sender_matcher, &port_holder));
+            free(pop_item_q(pending_senders_q, sender_matcher, &addr_holder));
           }
         pthread_mutex_unlock(&q_lock);
         break;
@@ -424,7 +426,7 @@ void *checker(void *sender_vp) {
   }
   // garbage collection
   pthread_mutex_lock(&q_lock);
-    pop_item_q(connected_senders_q, sender_matcher, &(sender_p->addr.sin_port));
+    pop_item_q(connected_senders_q, sender_matcher, &(sender_p->addr));
   pthread_mutex_unlock(&q_lock);
   free(sender_p);
 
@@ -434,33 +436,36 @@ void *checker(void *sender_vp) {
 
 /****** helper functions (unavailable to module users) ******/
 
-/* returns 1 if the sender's port number matches
- * the input port number; returns 0 otherwise
+/* returns 1 if the sender's addr matches
+ * the input addr (byte by byte with memcmp()); returns 0 otherwise
  *
  * designed to be used as a Queue module callback function
  */
-int sender_matcher(void *sender_vp, void *port_vp) {
+int sender_matcher(void *sender_vp, void *id_vp) {
   sender_t *sender_p = (sender_t *)sender_vp;
-  unsigned int *port_p = (unsigned int *)port_vp;
+  struct sockaddr_in *id_p = (struct sockaddr_in *)id_vp;
 
-  return (sender_p->addr.sin_port == *port_p);
+  if (memcmp(&(sender_p->addr), id_p, addr_len) == 0) {
+    return 1;
+  }
+  return 0;
 }
 
 /* callback for mrt_probe, expects to take in a pointer to an
- * NULL unsigned short pointer, which would be set to a valid pointer
+ * NULL (struct sockaddr_in *), which would be set to a valid pointer
  * if a match is found.
  */
 void probe_for_one(void *id_vp, void *target_id_vpp) {
-  unsigned short **target_id_pp = (unsigned short **)target_id_vpp;
-  unsigned short *target_id_p = *target_id_pp;
+  struct sockaddr_in **target_id_pp = (struct sockaddr_in  **)target_id_vpp;
+  struct sockaddr_in  *target_id_p  = *target_id_pp;
   if (target_id_p != NULL) {
-    unsigned short *id_p = (unsigned short *)id_vp;
+    struct sockaddr_in *id_p = (struct sockaddr_in  *)id_vp;
     sender_t *curr_sender;
     pthread_mutex_lock(&q_lock);
       curr_sender = get_item_q(connected_senders_q, sender_matcher, id_p);
       if (curr_sender != NULL && curr_sender->bytes_unread > 0) {
-        target_id_p = malloc(sizeof(unsigned short));
-        *target_id_p = *id_p;
+        target_id_p = malloc(addr_len);
+        memmove(target_id_p, id_p, addr_len);
       }
       // otherwise a mismatch; do nothing.
     pthread_mutex_unlock(&q_lock);

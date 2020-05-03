@@ -13,21 +13,23 @@
 #define RECEIVER_MAX_WINDOW_SIZE (MAX_MRT_PAYLOAD_LENGTH * 5)
 
 // will create the main thread that handles all incoming transmissions
-int mrt_open();
+int mrt_open(unsigned int port_number);
 
-/* accepts a connection request and returns the source port number. 
+/* accepts a connection request and returns a pointer to a copy of
+ * its ID struct (currently reusing `sockaddr_in`). 
  * If no requests exist yet, will block and wait until one shows up,
  * and then accept it.
+ * the sender is responsible for freeing the ID struct.
  */
-unsigned short mrt_accept1();
+struct sockaddr_in *mrt_accept1();
 
 /* Will accepted all the pending connections requests
- * and return a queue of their IDs (port numbers, as of now).
+ * and return a queue of their IDs (struct sockaddr_in, as of now).
  * Does not wait for a request to show up; will return an 
  * empty queue if there are no pending requests.
  *
  * The caller is responsible for freeing the (q_t *) as well
- * all the IDs (malloc'd unsigned short).
+ * all the IDs.
  */
 q_t *mrt_accept_all();
 
@@ -36,24 +38,24 @@ q_t *mrt_accept_all();
  * until there is data.
  *
  * Returns the number of bytes written.
- * Returns 0 if the connection closes while blocked waiting for data
+ * Returns 0 if the connection dies while waiting for data
  * Returns -1 if the call is spurious (connection not accepted yet,
  * mrt_open() not even called yet, etc.)
  */
-int mrt_receive1(unsigned short *id_p, void *buffer, int len);
+ // TODO: use CVAR instead of spurious sleep wakeups
+int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len);
 
 /* Returns the first connection that has some unread bytes
  * found in input queue.
  *
- * Expects a queue of IDs; returns either a pointer to a copy of that ID
+ * Expects a queue of IDs; returns either a pointer to a copy of a ID
  * or NULL (no satisfying ID found; does not wait for one).
  *
  * The user is responsible for freeing the returned copy.
  */
-unsigned short *mrt_probe(q_t *probe_q);
+struct sockaddr_in *mrt_probe(q_t *probe_q);
 
-/* signals that all incoming connections are no longer accepted
- * currently, this terminates all existing connections as well...
+/* the actual logic is handled in main_handler()...
  */
 void mrt_close();
 

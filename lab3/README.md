@@ -2,7 +2,7 @@
 
 #### MRT header composition
 
-* Identifies the senders via the `sockaddr_in` returned from `recvfrom()`, so the MRT header does not contain further identifier info. However, the checksum can be made stronger by including in the identifier info (but otherwise it is redundant).
+* A receiver identifies the connections/senders via the `sockaddr_in` returned from `recvfrom()`, so the MRT header does not contain further identifier info. However, the checksum can be made stronger by including in the identifier info (but otherwise it is redundant). Since the sender does not need to authenticate themselves, the connection id is assigned locally (instead of being received from the first ACON).
 
 #### Handling out-of-order delivery
 
