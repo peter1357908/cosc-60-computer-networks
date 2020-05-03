@@ -6,7 +6,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h> // exit(), malloc(), free()
+#include <stdlib.h> // exit(), calloc(), free()
 #include <unistd.h> // close(), sleep()
 #include <sys/socket.h>
 #include <arpa/inet.h> // htons()
@@ -82,7 +82,7 @@ pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 /****** functions ******/
 
 /* returns the connection ID (int; positive)
- * returns -1 upon any error and 0 upon success
+ * returns -1 upon any error
  * will block until the connection is established
  *
  * the `s_addr` should have the same format as
@@ -121,18 +121,20 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr) {
   }
  
   while(1) {
-    pthread_mutex_lock(&(curr_conn->lock));
-    if (curr_conn->id != -1) {
-      pthread_mutex_unlock(&(curr_conn->lock));
+    pthread_mutex_lock(&(curr_conn->receiver_lock));
+    if (curr_conn->last_acknowledged_frag != -1) {
+      pthread_mutex_unlock(&(curr_conn->receiver_lock));
       break;
     }
+    pthread_mutex_unlock(&(curr_conn->receiver_lock));
 
+    pthread_mutex_lock(&(curr_conn->outgoing_lock));
     build_rcon(curr_conn->outgoing_buffer);
     sendto(curr_conn->send_sockfd, curr_conn->outgoing_buffer,
           MRT_HASH_LENGTH + MRT_TYPE_LENGTH + MRT_FRAGMENT_LENGTH  
           0, (const struct sockaddr *)(&(curr_conn->rece_addr)), 
           addr_len);
-    pthread_mutex_unlock(&(curr_conn->lock));
+    pthread_mutex_unlock(&(curr_conn->outgoing_lock));
     sleep(RCON_PERIOD);
   }
   
@@ -174,19 +176,20 @@ void *handler(void *conn_vp) {
   int frag_difference = 0, num_remaining_bytes = 0;
   char *remaining_bytes_location = NULL;
 
-
-  // the main loop; processes all the incoming transmissions
+  // the main loop; handle all the incoming transmissions
   while (1) {
-    pthread_mutex_lock(&(curr_conn->lock));
     num_bytes_received = recvfrom(conn_p->send_sockfd, conn_p->incoming_buffer,
                       MRT_HEADER_LENGTH, 0, (struct sockaddr *)(&addr_holder),
                       &addr_len_holder);
 
     // before processing, check if close is flagged
+    pthread_mutex_lock(&(conn_p->close_lock));
     if (should_close == 1) {
+      pthread_mutex_unlock(&conn_p->close_lock);
       printf("Breaking from handler loop because should_close\n");
       break;
     }
+    pthread_mutex_unlock(&(conn_p->close_lock));
 
     // NULL-terminate the transmission to enable hash()
     incoming_buffer[num_bytes_received] = '\0';
@@ -207,73 +210,77 @@ void *handler(void *conn_vp) {
       case MRT_ACON :
         // start the sender_thread if it hasn't yet (meaning first ACON)
         // TODO: what if pthread_create() fails?
-        pthread_mutex_lock(&id_lock);
-          if (id_p == NULL) {
-            pthread_create(&sender_thread, NULL, sender, NULL);
-            pthread_create(&checker_thread, NULL, checker, NULL);
-            id_p = malloc(sizeof(unsigned short));
-            *id_p = addr_holder.sin_port;
-          }
-        pthread_mutex_unlock(&id_lock);
+        pthread_mutex_lock(&(conn_p->receiver_lock));
+        if (conn_p->last_acknowledged_frag == -1) {
+          pthread_create(&(conn_p->sender_thread), NULL, sender, conn_p);
+          pthread_create(&(conn_p->checker_thread), NULL, checker, conn_p);
+          conn_p->last_acknowledged_frag = 0;
+        }
+        pthread_mutex_unlock(&(conn_p->receiver_lock));
         // otherwise do nothing (duplicate ACONs are ignored)
         break;
 
       case MRT_ADAT :
         // first of all, receiver just proved the connection is alive
-        pthread_mutex_lock(&timeout_lock);
-          inactive_time = 0;
-        pthread_mutex_unlock(&timeout_lock);
+        pthread_mutex_lock(&(conn_p->timeout_lock));
+        conn_p->inactive_time = 0;
+        pthread_mutex_unlock(&(conn_p->timeout_lock));
         
         /* if the ADAT is at least as new as the last one, update
          * the frag and receiver_window_size if necessary
          */
-        pthread_mutex_lock(&receiver_lock);
-          frag_difference = frag_holder - last_acknowledged_frag;
-          if (frag_difference >= 0) {
-            last_acknowledged_frag = frag_holder;
-            if (receiver_window_size < winsize_holder) {
-              receiver_window_size = winsize_holder;
-            }
+        pthread_mutex_lock(&(conn_p->receiver_lock));
+        frag_difference = frag_holder - conn_p->last_acknowledged_frag;
+        if (frag_difference >= 0) {
+          conn_p->last_acknowledged_frag = frag_holder;
+          if (conn_p->receiver_window_size < winsize_holder) {
+            conn_p->receiver_window_size = winsize_holder;
           }
-        pthread_mutex_unlock(&receiver_lock);
+        }
+        pthread_mutex_unlock(&(conn_p->receiver_lock));
 
         // if we can free up the buffer, do it
         // note that frag_difference here does not need to be in mutex
         if (frag_difference > 0) {
-          pthread_mutex_lock(&buffer_lock);
-            // update the buffer
-            remaining_bytes_location = sender_buffer + MAX_MRT_PAYLOAD_LENGTH * frag_difference;
-            num_remaining_bytes = MAX_MRT_PAYLOAD_LENGTH * (last_payload_index - frag_difference + 1);
-            memmove(sender_buffer, remaining_bytes_location, num_remaining_bytes);
-            // update the num_bytes_buffered array
-            remaining_bytes_location = (char *)(num_bytes_buffered + frag_difference);
-            num_remaining_bytes = sizeof(int) * (last_payload_index - frag_difference + 1);
-            memmove(num_bytes_buffered, remaining_bytes_location, num_remaining_bytes);
-            // update the last_payload_index
-            last_payload_index -= frag_difference;
-          pthread_mutex_unlock(&buffer_lock);
+          pthread_mutex_lock(&(conn_p->buffer_lock));
+          // update the buffer
+          remaining_bytes_location = conn_p->sender_buffer + MAX_MRT_PAYLOAD_LENGTH * frag_difference;
+          num_remaining_bytes = MAX_MRT_PAYLOAD_LENGTH * (conn_p->last_payload_index - frag_difference + 1);
+          memmove(conn_p->sender_buffer, remaining_bytes_location, num_remaining_bytes);
+          // update the num_bytes_buffered array
+          remaining_bytes_location = (char *)(conn_p->num_bytes_buffered + frag_difference);
+          num_remaining_bytes = sizeof(int) * (conn_p->last_payload_index - frag_difference + 1);
+          memmove(conn_p->num_bytes_buffered, remaining_bytes_location, num_remaining_bytes);
+          // update the last_payload_index
+          conn_p->last_payload_index -= frag_difference;
+          pthread_mutex_unlock(&(conn_p->buffer_lock));
         }
         break;
 
       case MRT_ACLS :
         // could just do nothing here but...
-        pthread_mutex_lock(&timeout_lock);
-          inactive_time = CLOSE_TIMEOUT_THRESHOLD + 1;
-        pthread_mutex_unlock(&timeout_lock);
+        pthread_mutex_lock(&(conn_p->timeout_lock));
+        conn_p->inactive_time = CLOSE_TIMEOUT_THRESHOLD + 1;
+        pthread_mutex_unlock(&(conn_p->timeout_lock));
         break;
 
       default :
         // RCON, DATA, RCLS, UNKN
-        printf("transmission had good checksum but bad type = %d\n HOW????\n", type_holder);
+        printf("sender %d: transmission had good checksum but bad type (%d).\n HOW????\n", conn_p->id, type_holder);
         continue;
     }
-    pthread_mutex_unlock(&(curr_conn->lock));
   }
-  /* Should be closing now. Any clean-ups?
+  /* Do the clean-ups
    */
-  pthread_join(checker_thread, NULL);
-  pthread_join(sender_thread, NULL);
+  printf("sender %d: closing. Cleaning up.\n");
+  pthread_join(conn_p->checker_thread, NULL);
+  pthread_join(conn_p->sender_thread, NULL);
 
+  int id = conn_p->id;
+
+  pthread_mutex_lock(&q_lock);
+  connection_t_free(pop_item_q(connections_q, connection_matcher, &id));
+  pthread_mutex_unlock(&q_lock);
   // TODO: signal all blocked mrt_send()... or let them wake up from sleep?
   return NULL;
 }
@@ -288,58 +295,60 @@ void *handler(void *conn_vp) {
  *    send the next payload in the buffer
  */
 void *sender(void *conn_vp) {
+  connection_t *conn_p = (connection_t *)conn_vp;
   int resend_time = 0;
 
   while (1) {
-    pthread_mutex_lock(&close_lock);
-      if (should_close == 1) {
-    pthread_mutex_unlock(&close_lock);
-        break;
-      }
-    pthread_mutex_unlock(&close_lock);
+    pthread_mutex_lock(&(conn_p->close_lock));
+    if (should_close == 1) {
+      pthread_mutex_unlock(&(conn_p->close_lock));
+      break;
+    }
+    pthread_mutex_unlock(&(conn_p->close_lock));
     
     // TODO: simplify dangerously nested mutex
-    pthread_mutex_lock(&receiver_lock);
-    pthread_mutex_lock(&buffer_lock);
-      int next_payload_index = last_sent_frag - last_acknowledged_frag;
-      if (receiver_window_size < MAX_MRT_PAYLOAD_LENGTH
-          || next_payload_index > last_payload_index) {
-        if (next_payload_index > last_payload_index) {
-          if (resend_time > RESEND_TIMEOUT_THRESHOLD) {
-            last_sent_frag = last_acknowledged_frag;
-            resend_time = 0;
-          } else { resend_time += EMPTY_DATA_PERIOD; }
-        } 
-        else {
-          // the sender has something to send; reset timer
-          resend_time = 0; 
-        }
-        // send empty DATA and sleep
-    pthread_mutex_unlock(&buffer_lock);
-    pthread_mutex_unlock(&receiver_lock);
-        pthread_mutex_lock(&outgoing_lock);
-          build_data_empty();
-          sendto(send_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
-                  0, (const struct sockaddr *)(&rece_addr), 
-                  addr_len);
-        pthread_mutex_lock(&outgoing_lock);
-        sleep(EMPTY_DATA_PERIOD);
+    pthread_mutex_lock(&(conn_p->receiver_lock));
+    pthread_mutex_lock(&(conn_p->buffer_lock));
+    int next_payload_index = conn_p->last_sent_frag - conn_p->last_acknowledged_frag;
+    if (conn_p->receiver_window_size < MAX_MRT_PAYLOAD_LENGTH
+        || next_payload_index > conn_p->last_payload_index) {
+      if (next_payload_index > conn_p->last_payload_index) {
+        // the sender has nothing to send, consider resending fragments
+        if (resend_time > RESEND_TIMEOUT_THRESHOLD) {
+          conn_p->last_sent_frag = last_acknowledged_frag;
+          resend_time = 0;
+        } else { resend_time += EMPTY_DATA_PERIOD; }
       } else {
         // the sender has something to send; reset timer
-        resend_time = 0;
-        // send meaningful DATA
-        pthread_mutex_lock(&outgoing_lock);
-          build_data(next_payload_index, num_bytes_buffered[next_payload_index]);
-          sendto(send_sockfd, outgoing_buffer, MRT_HEADER_LENGTH,  
-                  0, (const struct sockaddr *)(&rece_addr), 
-                  addr_len);
-        pthread_mutex_lock(&outgoing_lock);
-    pthread_mutex_unlock(&buffer_lock);
-    pthread_mutex_unlock(&receiver_lock);
-        last_sent_frag += 1;
+        resend_time = 0; 
       }
-  }
+      pthread_mutex_unlock(&(conn_p->buffer_lock));
+      pthread_mutex_unlock(&(conn_p->receiver_lock));
 
+      // send empty DATA and sleep
+      pthread_mutex_lock(&(conn_p->outgoing_lock));
+      build_data_empty(conn_p->outgoing_buffer);
+      sendto(conn_p->send_sockfd, conn_p->outgoing_buffer, 
+              MRT_HASH_LENGTH + MRT_TYPE_LENGTH + MRT_FRAGMENT_LENGTH,  
+              0, (const struct sockaddr *)(&(conn_p->rece_addr)), 
+              addr_len);
+      pthread_mutex_unlock(&(conn_p->outgoing_lock));
+      sleep(EMPTY_DATA_PERIOD);
+    } else {
+      // the sender has something to send; reset timer
+      resend_time = 0;
+      // send meaningful DATA
+      pthread_mutex_lock(&(conn_p->outgoing_lock));
+      build_data(conn_p, next_payload_index, (conn_p->num_bytes_buffered)[next_payload_index]);
+      sendto(conn_p->send_sockfd, conn_p->outgoing_buffer, MRT_HEADER_LENGTH,  
+              0, (const struct sockaddr *)(&(conn_p->rece_addr)), 
+              addr_len);
+      pthread_mutex_unlock(&(conn_p->outgoing_lock));
+      pthread_mutex_unlock(&(conn_p->buffer_lock));
+      pthread_mutex_unlock(&(conn_p->receiver_lock));
+      conn_p->last_sent_frag += 1;
+    }
+  }
   // TODO: clean-ups?
   return NULL;
 }
@@ -350,21 +359,20 @@ void *sender(void *conn_vp) {
  */
 void *checker(void *conn_vp) {
   while (1) {
-    pthread_mutex_lock(&timeout_lock);
-      inactive_time += CLOSE_TIMEOUT_INCREMENT;
-      // if it would sleep past the threshold, go BOOM
-      if (inactive_time > CLOSE_TIMEOUT_THRESHOLD) {
-    pthread_mutex_unlock(&timeout_lock);
-        pthread_mutex_lock(&close_lock);
-          should_close = 1;
-        pthread_mutex_unlock(&close_lock);
-        break;
+    pthread_mutex_lock(&(conn_p->timeout_lock));
+    conn_p->inactive_time += CLOSE_TIMEOUT_INCREMENT;
+    // if it would sleep past the threshold, go BOOM
+    if (conn_p->inactive_time > CLOSE_TIMEOUT_THRESHOLD) {
+      pthread_mutex_unlock(&(conn_p->timeout_lock));
+      pthread_mutex_lock(&(conn_p->close_lock));
+      should_close = 1;
+      pthread_mutex_unlock(&(conn_p->close_lock));
+      break;
       }
-    pthread_mutex_unlock(&timeout_lock);
+    pthread_mutex_unlock(&(conn_p->timeout_lock));
     sleep(CLOSE_TIMEOUT_INCREMENT);
   }
   // TODO: any garbage collection necessary?
-
   return NULL;
 }
 
@@ -406,6 +414,23 @@ connection_t *connection_t_init(unsigned short port_number, unsigned long s_addr
   connection_p->should_close = 0;
 
   return connection_p;
+}
+
+/* the clean-up function to be called before handler() returns
+ */
+void connection_t_free(connection_t *conn_p) {
+  // just in case
+  if (conn_p == NULL) { return; }
+
+  close(conn_p->send_sockfd);
+
+  pthread_mutex_destroy(&(conn_p->buffer_lock));
+  pthread_mutex_destroy(&(conn_p->receiver_lock));
+  pthread_mutex_destroy(&(conn_p->timeout_lock));
+  pthread_mutex_destroy(&(conn_p->close_lock));
+  pthread_mutex_destroy(&(conn_p->outgoing_lock));
+
+  free(conn_p);
 }
 
 /* returns 1 if the connection's id matches the input id;
