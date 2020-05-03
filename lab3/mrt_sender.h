@@ -25,11 +25,11 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr);
  * Returns -1 if the call is spurious (connection not accepted yet,
  * mrt_open() not even called yet, etc.)
  */
-int mrt_send(void *buffer, int len);
+int mrt_send(int id, char *buffer, int len);
 
 /* will wait until final ADAT is received to send a RCLS
  * (unless signaled to close by timeout). Blocking.
  */
-void mrt_disconnect();
+void mrt_disconnect(int id);
 
 #endif // _mrt_sender_h

@@ -197,6 +197,7 @@ int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len) {
   pthread_mutex_unlock(&q_lock);
       return -1; 
     }
+  pthread_mutex_unlock(&q_lock);
   
   while(1) {
     pthread_mutex_lock(&q_lock);
