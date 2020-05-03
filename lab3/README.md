@@ -54,6 +54,8 @@
 
 ## Notable implementation choices:
 
+* currently IPv4-exclusive.
+
 * senders and receivers perform clean-up on a successful transmission by tricking the checker into thinking that a timeout happened (in fact, the receiver can just do nothing and let the connection timeout by itself).
 
 * once a connection closes, the receiver can no longer access the corresponding buffer (it gets garbage-collected alongside the other sender info)
@@ -82,5 +84,3 @@
 #### TOTHINKs
 
 * any reason to make `mrt_accept()` and `mrt_receive()` families non-blocking?
-
-* any reason to create a new socket for each connection in the sender module?

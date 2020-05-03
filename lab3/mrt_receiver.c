@@ -267,13 +267,14 @@ void *main_handler(void *_null) {
   sender_t *curr_sender = NULL;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
   unsigned long hash_holder = 0;
+  unsigned int addr_len_holder = 0;
   int type_holder = 0, frag_holder = 0;
 
   // the main loop; processes all the incoming transmissions
   while (1) {
     bytes_received = recvfrom(rece_sockfd, incoming_buffer,
       MAX_UDP_PAYLOAD_LENGTH, 0, (struct sockaddr *)(&addr_holder),
-      &addr_len);
+      &addr_len_holder);
 
     // before processing, check if close is flagged
     pthread_mutex_lock(&close_lock);

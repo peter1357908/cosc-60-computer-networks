@@ -26,6 +26,7 @@
 /****** declarations ******/
 typedef struct connection {
   int id;
+  struct sockaddr_in send_addr;
   struct sockaddr_in rece_addr;
 
   /* note that the two arrays below only have valid elements in index
@@ -34,13 +35,15 @@ typedef struct connection {
   int last_payload_index; // cannot go over MAX_PAYLOADS_BUFFERABLE
   char sender_buffer[MAX_MRT_PAYLOAD_LENGTH * MAX_PAYLOADS_BUFFERABLE];
   int num_bytes_buffered[MAX_PAYLOADS_BUFFERABLE];
-  
-  int receiver_window_size;
+  pthread_mutex_t buffer_lock;
+
   /* always 1 lower than oldest buffered fragment;
    * initially -1, and set to 0 upon first ACON to indict a connection
    * is formed.
    */
   int last_acknowledged_frag;
+  int receiver_window_size;
+  pthread_mutex_t receiver_lock;
 
   /* assumes that the first frag is number 0 and is already acknowledged
    * before being used (after the first ACON, thus beginning with 0)
@@ -48,20 +51,21 @@ typedef struct connection {
   int last_sent_frag;
 
   int inactive_time;
+  pthread_mutex_t timeout_lock;
 
   int should_close;
+  pthread_mutex_t close_lock;
 
   pthread_t handler_thread, sender_thread, checker_thread;
 
   char incoming_buffer[MRT_HEADER_LENGTH + 1]; // +1 for NULL-termination for hash()
   char outgoing_buffer[MAX_UDP_PAYLOAD_LENGTH + 1];
-
-  pthread_mutex_t lock;
+  pthread_mutex_t outgoing_lock;
 } connection_t;
 
-void *handler(void *conn_p);
-void *sender(void *conn_p);
-void *checker(void *conn_p);
+void *handler(void *conn_vp);
+void *sender(void *conn_vp);
+void *checker(void *conn_vp);
 void build_rcon(char *outgoing_buffer);
 void build_data_empty(char *outgoing_buffer);
 void build_data(connection_t *conn_p, int payload_index, int len);
@@ -69,7 +73,6 @@ void build_rcls(char *outgoing_buffer);
 
 /****** global variables ******/
 unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
-int send_sockfd;
 int next_id = 0;
 int initial_frag = 0;
 
@@ -95,12 +98,6 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr) {
       perror("make_q() failed\n");
       return -1;
     }
-
-    send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (send_sockfd < 0) {
-      perror("send_sockfd = socket() error\n");
-      return -1;
-    }
   }
   pthread_mutex_unlock(&q_lock);
   
@@ -118,7 +115,7 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr) {
   /****** just keep trying to connect to server... ******/
 
   // create the handler thread first (or else ACON cannot be handled)
-  if (pthread_create(&(currconn->handler_thread), NULL, handler, currconn) != 0) {
+  if (pthread_create(&(curr_conn->handler_thread), NULL, handler, curr_conn) != 0) {
     perror("pthread_create(handler) error\n");
     return -1;
   }
@@ -131,7 +128,7 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr) {
     }
 
     build_rcon(curr_conn->outgoing_buffer);
-    sendto(send_sockfd, curr_conn->outgoing_buffer,
+    sendto(curr_conn->send_sockfd, curr_conn->outgoing_buffer,
           MRT_HASH_LENGTH + MRT_TYPE_LENGTH + MRT_FRAGMENT_LENGTH  
           0, (const struct sockaddr *)(&(curr_conn->rece_addr)), 
           addr_len);
@@ -167,28 +164,29 @@ void mrt_disconnect(){
 /* The main handler; all incoming transmissions will be validated
  * and handled here.
  */
-void *handler(void *conn_p) {
+void *handler(void *conn_vp) {
+  connection_t *conn_p = (connection_t *)conn_vp;
   int num_bytes_received = 0;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
   unsigned long hash_holder = 0;
+  unsigned int addr_len_holder = 0;
   int type_holder = 0, frag_holder = 0, winsize_holder = 0;
   int frag_difference = 0, num_remaining_bytes = 0;
   char *remaining_bytes_location = NULL;
 
+
   // the main loop; processes all the incoming transmissions
   while (1) {
-    num_bytes_received = recvfrom(send_sockfd, incoming_buffer,
-      MRT_HEADER_LENGTH, 0, (struct sockaddr *)(&addr_holder),
-      &addr_len);
+    pthread_mutex_lock(&(curr_conn->lock));
+    num_bytes_received = recvfrom(conn_p->send_sockfd, conn_p->incoming_buffer,
+                      MRT_HEADER_LENGTH, 0, (struct sockaddr *)(&addr_holder),
+                      &addr_len_holder);
 
     // before processing, check if close is flagged
-    pthread_mutex_lock(&close_lock);
-      if (should_close == 1) {
-        printf("Breaking from handler loop because should_close\n");
-    pthread_mutex_unlock(&close_lock);
-        break;
-      }
-    pthread_mutex_unlock(&close_lock);
+    if (should_close == 1) {
+      printf("Breaking from handler loop because should_close\n");
+      break;
+    }
 
     // NULL-terminate the transmission to enable hash()
     incoming_buffer[num_bytes_received] = '\0';
@@ -269,6 +267,7 @@ void *handler(void *conn_p) {
         printf("transmission had good checksum but bad type = %d\n HOW????\n", type_holder);
         continue;
     }
+    pthread_mutex_unlock(&(curr_conn->lock));
   }
   /* Should be closing now. Any clean-ups?
    */
@@ -288,7 +287,7 @@ void *handler(void *conn_p) {
  * else:
  *    send the next payload in the buffer
  */
-void *sender(void *conn_p) {
+void *sender(void *conn_vp) {
   int resend_time = 0;
 
   while (1) {
@@ -349,7 +348,7 @@ void *sender(void *conn_p) {
  * received). Just keeps incrementing the inactivity counter until
  * the connection needs to be dropped...
  */
-void *checker(void *conn_p) {
+void *checker(void *conn_vp) {
   while (1) {
     pthread_mutex_lock(&timeout_lock);
       inactive_time += CLOSE_TIMEOUT_INCREMENT;
@@ -379,7 +378,15 @@ connection_t *connection_t_init(unsigned short port_number, unsigned long s_addr
 
   if (connection_p == NULL) { return NULL }
 
-  if (pthread_mutex_init(&(connection_p->lock), NULL) != 0) { return NULL }
+  if (pthread_mutex_init(&(connection_p->buffer_lock), NULL) != 0 ||
+      pthread_mutex_init(&(connection_p->receiver_lock), NULL) != 0 ||
+      pthread_mutex_init(&(connection_p->timeout_lock), NULL) != 0 ||
+      pthread_mutex_init(&(connection_p->close_lock), NULL) != 0 ||
+      pthread_mutex_init(&(connection_p->outgoing_lock), NULL) != 0
+      ) { return NULL }
+
+  connection_p->send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if (connection_p->send_sockfd < 0) { return NULL }
 
   connection_p->id = next_id++;
   
