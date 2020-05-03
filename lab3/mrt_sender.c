@@ -16,11 +16,12 @@
 #include "mrt_sender.h"
 #include "utilities.h" // hash()
 
-#define CHECKER_PERIOD          2000                  // milliseconds
-#define SENDER_PERIOD           500
-#define RCON_PERIOD             500
-#define TIMEOUT_THRESHOLD       (CHECKER_PERIOD * 5)
-#define MAX_PAYLOADS_BUFFERABLE 10
+#define RCON_PERIOD               EXPECTED_RTT * 2
+#define EMPTY_DATA_PERIOD         EXPECTED_RTT * 2
+#define RESEND_TIMEOUT_THRESHOLD  EMPTY_DATA_PERIOD * 3
+#define CLOSE_TIMEOUT_INCREMENT   EMPTY_DATA_PERIOD * 2 // timeout increment
+#define CLOSE_TIMEOUT_THRESHOLD   CLOSE_TIMEOUT_INCREMENT * 3
+#define MAX_PAYLOADS_BUFFERABLE   10
 
 /****** declarations ******/
 
@@ -100,7 +101,6 @@ unsigned short *mrt_connect() {
     pthread_mutex_lock(&id_lock);
       if (id_p != NULL) {
         pthread_mutex_unlock(&id_lock);
-        pthread_mutex_destroy(&id_lock);
         break;
       }
     pthread_mutex_unlock(&id_lock);
@@ -117,6 +117,25 @@ unsigned short *mrt_connect() {
   return id_p;
 }
 
+/* returns the number of bytes successfully sent (acknowledged).
+ * will block until the corresponding final ADAT is processed (large
+ * enough data will be split into multiple fragments)
+ *
+ * Returns -1 if the call is spurious (connection not accepted yet,
+ * mrt_open() not even called yet, etc.)
+ */
+int mrt_send(void *buffer, int len) {
+  int bytes_sent;
+
+  return bytes_sent;
+}
+
+/* will wait until final ADAT is received to send a RCLS
+ * (unless signaled to close by timeout). Blocking.
+ */
+void mrt_disconnect(){
+
+}
 
 /****** thread functions (unavailable to module users) ******/
 
@@ -216,7 +235,7 @@ void *main_handler(void *_null) {
       case MRT_ACLS :
         // could just do nothing here but...
         pthread_mutex_lock(&timeout_lock);
-          inactive_time = TIMEOUT_THRESHOLD + 1;
+          inactive_time = CLOSE_TIMEOUT_THRESHOLD + 1;
         pthread_mutex_unlock(&timeout_lock);
         break;
 
@@ -235,13 +254,18 @@ void *main_handler(void *_null) {
   return NULL;
 }
 
-
-/* the main sendner; simply keeps sending DATA: send empty DATA
- * and go to sleep for a while if:
- * 1. the receiver_window_size is too small
- * 2. all frags in the buffer are sent (empty buffer is a special case of 2.)
+/* the main sender; simply keeps sending DATA:
+ * if the receiver window_size is too small or all data sent:
+ *   if all data sent:
+ *     start a timer... once threshold exceeded, start re-sending old
+ *     payloads (by marking them as unsent)
+ *   send empty DATA
+ * else:
+ *    send the next payload in the buffer
  */
 void *main_sender(void *_null) {
+  int resend_time = 0;
+
   while (1) {
     pthread_mutex_lock(&close_lock);
       if (should_close == 1) {
@@ -249,15 +273,24 @@ void *main_sender(void *_null) {
         break;
       }
     pthread_mutex_unlock(&close_lock);
-
     
     // TODO: simplify dangerously nested mutex
     pthread_mutex_lock(&receiver_lock);
     pthread_mutex_lock(&buffer_lock);
       int next_payload_index = last_sent_frag - last_acknowledged_frag;
-      if (receiver_window_size < MAX_MRT_PAYLOAD_LENGTH 
+      if (receiver_window_size < MAX_MRT_PAYLOAD_LENGTH
           || next_payload_index > last_payload_index) {
-        // send empty DATA
+        if (next_payload_index > last_payload_index) {
+          if (resend_time > RESEND_TIMEOUT_THRESHOLD) {
+            last_sent_frag = last_acknowledged_frag;
+            resend_time = 0;
+          } else { resend_time += EMPTY_DATA_PERIOD; }
+        } 
+        else {
+          // the sender has something to send; reset timer
+          resend_time = 0; 
+        }
+        // send empty DATA and sleep
     pthread_mutex_unlock(&buffer_lock);
     pthread_mutex_unlock(&receiver_lock);
         pthread_mutex_lock(&outgoing_lock);
@@ -266,8 +299,10 @@ void *main_sender(void *_null) {
                   0, (const struct sockaddr *)(&rece_addr), 
                   addr_len);
         pthread_mutex_lock(&outgoing_lock);
-        sleep(SENDER_PERIOD);
+        sleep(EMPTY_DATA_PERIOD);
       } else {
+        // the sender has something to send; reset timer
+        resend_time = 0;
         // send meaningful DATA
         pthread_mutex_lock(&outgoing_lock);
           build_data(next_payload_index, num_bytes_buffered[next_payload_index]);
@@ -292,9 +327,9 @@ void *main_sender(void *_null) {
 void *checker(void *_null) {
   while (1) {
     pthread_mutex_lock(&timeout_lock);
-      inactive_time += CHECKER_PERIOD;
+      inactive_time += CLOSE_TIMEOUT_INCREMENT;
       // if it would sleep past the threshold, go BOOM
-      if (inactive_time > TIMEOUT_THRESHOLD) {
+      if (inactive_time > CLOSE_TIMEOUT_THRESHOLD) {
     pthread_mutex_unlock(&timeout_lock);
         pthread_mutex_lock(&close_lock);
           should_close = 1;
@@ -302,7 +337,7 @@ void *checker(void *_null) {
         break;
       }
     pthread_mutex_unlock(&timeout_lock);
-    sleep(CHECKER_PERIOD);
+    sleep(CLOSE_TIMEOUT_INCREMENT);
   }
   // TODO: any garbage collection necessary?
 

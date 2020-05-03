@@ -17,10 +17,10 @@
 #include "Queue.h"
 #include "utilities.h" // hash()
 
-#define CHECKER_PERIOD          2000                  // milliseconds
-#define ACCEPT1_PERIOD          500
-#define RECEIVE1_PERIOD         500
-#define TIMEOUT_THRESHOLD       (CHECKER_PERIOD * 5)
+#define CHECKER_PERIOD          EXPECTED_RTT * 4
+#define TIMEOUT_THRESHOLD       CHECKER_PERIOD * 3
+#define ACCEPT1_PERIOD          EXPECTED_RTT * 2 // connection request
+#define RECEIVE1_PERIOD         EXPECTED_RTT * 2 // sender buffer
 
 /****** declarations ******/
 typedef struct sender {
@@ -178,7 +178,7 @@ q_t *mrt_accept_all() {
  * until there is data.
  *
  * Returns the number of bytes written.
- * Returns 0 if the connection closes while blocked waiting for data
+ * Returns 0 if the connection dies while waiting for data
  * Returns -1 if the call is spurious (connection not accepted yet,
  * mrt_open() not even called yet, etc.)
  */

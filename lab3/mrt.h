@@ -31,11 +31,17 @@
 #define MRT_WINDOWSIZE_LOCATION  (MRT_FRAGMENT_LOCATION + MRT_FRAGMENT_LENGTH)
 #define MRT_PAYLOAD_LOCATION     MRT_HEADER_LENGTH
 
-#define MAX_UDP_PAYLOAD_LENGTH   65507  // IPv4: 65507, IPv6: 65527
-#define MAX_UDP_OVERHEAD         65535 - MAX_UDP_PAYLOAD_LENGTH
+/* references for MAX_UDP_PAYLOAD_LENGTH:
+ * https://stackoverflow.com/questions/14993000/the-most-reliable-and-efficient-udp-packet-size
+ * https://stackoverflow.com/questions/1098897/what-is-the-largest-safe-udp-packet-size-on-the-internet
+ * it's supposedly the maximum allowed such that it is NEVER
+ * fragmented.
+ */
+#define MAX_UDP_PAYLOAD_LENGTH   508
 #define MAX_MRT_PAYLOAD_LENGTH   (MAX_UDP_PAYLOAD_LENGTH - MRT_HEADER_LENGTH)
 
-#define PORT_NUMBER              4242   // currently fixed (for loopback) 
+// consistently less than 0.4ms with `ping -s 64000 localhost`
+#define EXPECTED_RTT             10
 
 // variables initialized in mrt.c; for memmove() use
 const int unkn_type;

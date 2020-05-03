@@ -12,7 +12,13 @@
 
 #### Handling high latency, packet loss, and silent disconnection:
 
-* the sender is always responsible for *actively* maintaining the connection. At first, the sender keeps sending RCONs until an ACON arrives; then the sender will keep sending DATAs - if the advertised window size is too small or the sender has nothing to send at the moment, the DATAs will be empty, otherwise DATA containing payloads will be sent. The receiver, on the other hand, passively maintains the connection by responding to every transmission from the sender (likely sending duplicate acknowledgements).
+* the sender is always responsible for *actively* maintaining the connection. At first, the sender keeps sending RCONs until an ACON arrives; then the sender will keep sending DATAs: 
+
+  * if the advertised window size is too small or the sender has nothing to send at the moment, the DATAs will be empty, otherwise DATA containing payloads will be sent. The receiver, on the other hand, passively maintains the connection by responding to every transmission from the sender (likely sending duplicate acknowledgements).
+
+  * if the sender has nothing to send at the moment, it will start a timer. The timer is reset if the sender has anything to send again. Upon reaching the timeout threshold, the sender marks all unacknowledged fragments as unsent and reset the timer, so in the next iteration, the sender will naturally start resending those fragments.
+
+* timeout counter for closing is automatically incremented; each incoming transmission resets the corresponding timeout counter. If no transmission occurs for a period of time, the counter will be let to exceed the timeout threshold and cause the connection to be dropped.
 
 ## Lab question responses
 1. How I tested against packet loss
@@ -44,9 +50,9 @@
 
 1. Files that contain the implementation of the nine primary MRT abstractions
 
-## Notable implementation choices:
+`mrt_sender.c` and `mrt_receiver.c` contain the actual code while `mrt_sender.h` and `mrt_receiver.h` are the header files for the abstracted methods available to `mrt` module users.
 
-* only supports the loopback interface (consequently, connections/senders are identified by their port number alone)
+## Notable implementation choices:
 
 * senders and receivers perform clean-up on a successful transmission by tricking the checker into thinking that a timeout happened (in fact, the receiver can just do nothing and let the connection timeout by itself).
 
@@ -54,15 +60,25 @@
 
 ## Structural TODOs / TOTHINKs (not part of the write-up):
 
+#### breaking changes:
+
+* acknowledge by bytes instead of fragments
+* use `CVAR` instead of relying on waking up repeatedly from `sleep()` (what was the term for such a bad practice?).
+* make a sender window struct... the current approach is too unwieldy
+
+#### not-so-breaking changes:
+
 * protect against more bad use cases such as repeatedly calling `mrt_open()`
 * consider using MSG_CONFIRM flags for sending acknowledgements
 * consider sending acknowldedgements in new threads (minor concurrency)
 * consider creating a lock for each sender rather than for the entire pair of queues
 * keep the buffer of a closed connection in memory if the buffer still has unread bytes... until...?
-* any reason to make `mrt_accept()` and `mrt_receive()` families non-blocking?
 * store `last_frag` instead of `next_frag` in the `sender_t`.
-* use `CVAR` instead of relying on waking up repeatedly from `sleep()` (what was the term for such a bad practice?).
 * verify in sender that the received message is indeed from the target receiver
 * verify all received info (even given same hash, same source, etc. E.g. the received fragment number must be within valid range)
-* make a sender window struct... the current approach is too unwieldy
 * use circular buffer (or other efficient ones) instead of relying on memmove()
+* stop indenting for mutex pairs... it hurts me. I hurt myself.
+
+#### TOTHINKs
+
+* any reason to make `mrt_accept()` and `mrt_receive()` families non-blocking?
