@@ -78,7 +78,7 @@ void *handler(void *conn_vp);
 void *sender(void *conn_vp);
 void *checker(void *conn_vp);
 connection_t *connection_t_init(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned long receiver_s_addr);
-void connection_t_free(connection_t *conn_p);
+void connection_t_free(void *conn_vp);
 int connection_matcher(void *connection_vp, void *id_vp);
 void build_rcon(char *outgoing_buffer);
 void build_data_empty(char *outgoing_buffer);
@@ -149,6 +149,7 @@ int mrt_connect(unsigned short sender_port_number, unsigned short receiver_port_
           0, (const struct sockaddr *)(&(curr_conn->rece_addr)), 
           addr_len);
     pthread_mutex_unlock(&(curr_conn->outgoing_lock));
+
     usleep(RCON_PERIOD);
   }
   
@@ -184,8 +185,8 @@ int mrt_send(int id, char *buffer, int len) {
   pthread_mutex_lock(&(conn_p->receiver_lock));
   pthread_mutex_lock(&(conn_p->buffer_lock));
   int last_buffered_frag = conn_p->last_payload_index + conn_p->last_acknowledged_frag + 1;
-  pthread_mutex_lock(&(conn_p->buffer_lock));
-  pthread_mutex_lock(&(conn_p->receiver_lock));
+  pthread_mutex_unlock(&(conn_p->buffer_lock));
+  pthread_mutex_unlock(&(conn_p->receiver_lock));
 
   // magic ceiling division: https://stackoverflow.com/a/14878734
   // NOTE: no need to wrap in mutex... right?
@@ -239,6 +240,7 @@ int mrt_send(int id, char *buffer, int len) {
     } else {
       // done copying already; go to sleep...
       usleep(MRT_SEND_PERIOD);
+      continue; // just to be safe
     }
   }
   // TODO: num_bytes_copied SHOULD be equal to len now...
@@ -304,6 +306,10 @@ void mrt_disconnect(int id) {
 
 /* The main handler; all incoming transmissions will be validated
  * and handled here.
+ *
+ * deletes the connections_q if the last sender exited (should not affect
+ * anything - handler also sets the pointer to be NULL so it will be
+ * re-initialized in the next mrt_onnect())
  */
 void *handler(void *conn_vp) {
   connection_t *conn_p = (connection_t *)conn_vp;
@@ -346,9 +352,6 @@ void *handler(void *conn_vp) {
     memmove(&type_holder, conn_p->incoming_buffer + MRT_TYPE_LOCATION, MRT_TYPE_LENGTH);
     memmove(&frag_holder, conn_p->incoming_buffer + MRT_FRAGMENT_LOCATION, MRT_FRAGMENT_LENGTH);
     memmove(&winsize_holder, conn_p->incoming_buffer + MRT_WINDOWSIZE_LOCATION, MRT_WINDOWSIZE_LENGTH);
-    
-    // DEBUG
-    printf("len=%d, type=%d, frag=%d, winsize=%d\n", num_bytes_received, type_holder, frag_holder, winsize_holder);
 
     switch (type_holder) {
       
@@ -396,9 +399,9 @@ void *handler(void *conn_vp) {
           memmove(conn_p->num_bytes_buffered, remaining_bytes_location, num_remaining_bytes);
           // update the last_payload_index
           conn_p->last_payload_index -= frag_difference;
-
-          pthread_mutex_unlock(&(conn_p->buffer_lock));          pthread_mutex_unlock(&(conn_p->receiver_lock));
+          pthread_mutex_unlock(&(conn_p->buffer_lock));
         }
+        pthread_mutex_unlock(&(conn_p->receiver_lock));
         break;
 
       case MRT_ACLS :
@@ -423,6 +426,10 @@ void *handler(void *conn_vp) {
 
   pthread_mutex_lock(&q_lock);
   connection_t_free(pop_item_q(connections_q, connection_matcher, &id));
+  if (peek_q(connections_q) == NULL) { 
+    delete_q(connections_q, connection_t_free); 
+    connections_q = NULL;
+  }
   pthread_mutex_unlock(&q_lock);
   // TODO: signal all blocked mrt_send()... or let them wake up from sleep?
   return NULL;
@@ -477,6 +484,7 @@ void *sender(void *conn_vp) {
               addr_len);
       pthread_mutex_unlock(&(conn_p->outgoing_lock));
       usleep(EMPTY_DATA_PERIOD);
+      continue; // just to be safe
     } else {
       // the sender has something to send; reset timer
       resend_time = 0;
@@ -484,8 +492,9 @@ void *sender(void *conn_vp) {
       pthread_mutex_lock(&(conn_p->outgoing_lock));
       int payload_length = (conn_p->num_bytes_buffered)[next_payload_index];
       build_data(conn_p, next_payload_index, payload_length);
-      sendto(conn_p->send_sockfd, conn_p->outgoing_buffer, payload_length,  
-              0, (const struct sockaddr *)(&(conn_p->rece_addr)), 
+      sendto(conn_p->send_sockfd, conn_p->outgoing_buffer, 
+              MRT_PAYLOAD_LOCATION + payload_length, 0,
+              (const struct sockaddr *)(&(conn_p->rece_addr)), 
               addr_len);
       pthread_mutex_unlock(&(conn_p->outgoing_lock));
       conn_p->last_sent_index += 1;
@@ -513,9 +522,10 @@ void *checker(void *conn_vp) {
       conn_p->should_close = 1;
       pthread_mutex_unlock(&(conn_p->close_lock));
       break;
-      }
+    }
     pthread_mutex_unlock(&(conn_p->timeout_lock));
     usleep(CLOSE_TIMEOUT_INCREMENT);
+    continue; // just to be safe
   }
   // TODO: any garbage collection necessary?
   return NULL;
@@ -571,8 +581,10 @@ connection_t *connection_t_init(unsigned short sender_port_number, unsigned shor
 }
 
 /* the clean-up function to be called before handler() returns
+ * signature is so that it can be used as a clean-up callback to q
  */
-void connection_t_free(connection_t *conn_p) {
+void connection_t_free(void *conn_vp) {
+  connection_t *conn_p = (connection_t *)conn_vp;
   // just in case
   if (conn_p == NULL) { return; }
 
@@ -625,7 +637,7 @@ void build_data_empty(char *outgoing_buffer) {
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }
 
-void build_data(connection_t *conn_p, int payload_index, int len) {
+void build_data(connection_t *conn_p, int payload_index, int payload_len) {
   int last_acknowledged_frag = conn_p->last_acknowledged_frag;
   char *sender_buffer = conn_p->sender_buffer;
   char *outgoing_buffer = conn_p->outgoing_buffer;
@@ -634,11 +646,9 @@ void build_data(connection_t *conn_p, int payload_index, int len) {
 
   memmove(outgoing_buffer + MRT_TYPE_LOCATION, &data_type, MRT_TYPE_LENGTH);
   memmove(outgoing_buffer + MRT_FRAGMENT_LOCATION, &sending_frag, MRT_FRAGMENT_LENGTH);
+  memmove(outgoing_buffer + MRT_PAYLOAD_LOCATION, sender_buffer + payload_index * MAX_MRT_PAYLOAD_LENGTH, payload_len);
 
-  memmove(outgoing_buffer + MRT_PAYLOAD_LOCATION, sender_buffer + payload_index * MAX_MRT_PAYLOAD_LENGTH, len);
-  
-  
-  outgoing_buffer[MRT_PAYLOAD_LOCATION + len] = '\0';
+  outgoing_buffer[MRT_PAYLOAD_LOCATION + payload_len] = '\0';
   unsigned long hash_holder = hash(outgoing_buffer + MRT_HASH_LENGTH);
   memmove(outgoing_buffer, &hash_holder, MRT_HASH_LENGTH);
 }

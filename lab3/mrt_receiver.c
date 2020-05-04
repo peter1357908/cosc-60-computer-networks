@@ -116,7 +116,8 @@ struct sockaddr_in *mrt_accept1() {
       curr_sender = deq_q(pending_senders_q);
       if (curr_sender == NULL) {
     pthread_mutex_unlock(&q_lock);
-        usleep(ACCEPT1_PERIOD); 
+        usleep(ACCEPT1_PERIOD);
+        continue;
       } else {
     pthread_mutex_unlock(&q_lock);
         break;
@@ -216,6 +217,7 @@ int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len) {
       if (curr_sender->bytes_unread <= 0) {
     pthread_mutex_unlock(&q_lock);
         usleep(RECEIVE1_PERIOD);
+        continue; // just to be safe
       } else {
         int bytes_unread = curr_sender->bytes_unread;
         int bytes_read = (len < bytes_unread) ? len : bytes_unread;
