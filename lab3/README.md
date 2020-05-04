@@ -6,9 +6,9 @@
 
 * There are 6 types of MRT transmissions (each of them corresponds to an integer as defined in `mrt.h` as well):
   1. `RCON`: a connection request, in which the sender includes the preferred initial fragment number (set to be 0 in the implementation)
-  1. `ACON`: acknowledgement for RCON, in which the receiver acknowledges the initial fragment number and start expecting the next fragment as the DATA fragment. The receiver also advertises for its current window size in this type of transmission.
-  1. `DATA`: a data transmission, with its corresponding fragment number.
-  1. `ADAT`: acknowledgement for DATA , in which the receiver acknowledges that all fragments, up to the included fragment number, are already either processed or buffered in the receiver window.
+  1. `ACON`: acknowledgement for RCON, in which the receiver acknowledges the initial fragment number and start expecting the next fragment as the DATA fragment. The receiver advertises for its current window size (the first, non-duplicate ACON should contain the max window size) for this connection in `ACON`.
+  1. `DATA`: a data transmission, with its corresponding fragment number. An empty DATA transmission with a special fragment number is one sent purely to keep the connection alive (more in section below).
+  1. `ADAT`: acknowledgement for DATA , in which the receiver acknowledges that all fragments, up to the included fragment number, are already either processed or buffered in the receiver window. The receiver also advertises for its current window size in `ADAT`.
   1. `RCLS`: a disconnection request, which the sender only sends after making sure that the sender has nothing buffered to send anymore (in other words, all sent data's acknowledges are correctly received). As a result, no fragment number is necessary here (it will only be sent after the last sent fragment is acknowledged).
   1. `ACLS`: acknowledgement for RCLS; nothing special - in fact, all this transmission has is a hash and a type of `ACLS`. It is not very useful, either, due to how `RCLS` is designed (the sender can start packing up immediately after sending out an `RCLS`).
 
