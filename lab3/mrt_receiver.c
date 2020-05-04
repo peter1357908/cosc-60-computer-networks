@@ -4,10 +4,14 @@
  * By Shengsong Gao, April 2020.
  */
 
+// the following two includes are necessary for usleep()
+#define _XOPEN_SOURCE   600
+#define _POSIX_C_SOURCE 200112L
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h> // exit(), malloc(), free()
-#include <unistd.h> // close(), sleep()
+#include <unistd.h> // close(), usleep()
 #include <sys/socket.h>
 #include <arpa/inet.h> // htons()
 #include <pthread.h>
@@ -76,8 +80,7 @@ int mrt_open(unsigned int port_number) {
   rece_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
   /****** binding the socket ******/
-  if (bind(rece_sockfd, (struct sockaddr *)&rece_addr, addr_len) < 0)
-  {
+  if (bind(rece_sockfd, (struct sockaddr *)&rece_addr, addr_len) < 0) {
     perror("bind(rece_sockfd) error\n");
     return -1;
   }
@@ -113,7 +116,7 @@ struct sockaddr_in *mrt_accept1() {
       curr_sender = deq_q(pending_senders_q);
       if (curr_sender == NULL) {
     pthread_mutex_unlock(&q_lock);
-        sleep(ACCEPT1_PERIOD); 
+        usleep(ACCEPT1_PERIOD); 
       } else {
     pthread_mutex_unlock(&q_lock);
         break;
@@ -212,7 +215,7 @@ int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len) {
       // the connection remains; now either sleep or perform the copy
       if (curr_sender->bytes_unread <= 0) {
     pthread_mutex_unlock(&q_lock);
-        sleep(RECEIVE1_PERIOD);
+        usleep(RECEIVE1_PERIOD);
       } else {
         int bytes_unread = curr_sender->bytes_unread;
         int bytes_read = (len < bytes_unread) ? len : bytes_unread;
@@ -264,7 +267,7 @@ void mrt_close() {
  * and handled here.
  */
 void *main_handler(void *_null) {
-  int bytes_received = 0;
+  int num_bytes_received = 0;
   sender_t *curr_sender = NULL;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
   unsigned long hash_holder = 0;
@@ -273,7 +276,7 @@ void *main_handler(void *_null) {
 
   // the main loop; processes all the incoming transmissions
   while (1) {
-    bytes_received = recvfrom(rece_sockfd, incoming_buffer,
+    num_bytes_received = recvfrom(rece_sockfd, incoming_buffer,
       MAX_UDP_PAYLOAD_LENGTH, 0, (struct sockaddr *)(&addr_holder),
       &addr_len_holder);
 
@@ -287,7 +290,7 @@ void *main_handler(void *_null) {
     pthread_mutex_unlock(&close_lock);
 
     // NULL-terminate the transmission to enable hash()
-    incoming_buffer[bytes_received] = '\0';
+    incoming_buffer[num_bytes_received] = '\0';
 
     // first validate the transmission with checksum
     memmove(&hash_holder, incoming_buffer, MRT_HASH_LENGTH);
@@ -299,6 +302,10 @@ void *main_handler(void *_null) {
     // then check the transmission type and act accordingly
     memmove(&type_holder, incoming_buffer + MRT_TYPE_LOCATION, MRT_TYPE_LENGTH);
     memmove(&frag_holder, incoming_buffer + MRT_FRAGMENT_LOCATION, MRT_FRAGMENT_LENGTH);
+
+    // DEBUG
+    printf("len=%d, type=%d, frag=%d, data=%s\n", num_bytes_received, type_holder, frag_holder, incoming_buffer);
+
     switch (type_holder) {
       
       case MRT_RCON :
@@ -340,7 +347,7 @@ void *main_handler(void *_null) {
              * AND it is not out of order;
              */
             int curr_window_size = RECEIVER_MAX_WINDOW_SIZE - curr_sender->bytes_unread;
-            int payload_size = bytes_received - MRT_HEADER_LENGTH;
+            int payload_size = num_bytes_received - MRT_HEADER_LENGTH;
             if (curr_window_size >= payload_size && curr_sender->next_frag == frag_holder) {
               char *next_free_slot = (curr_sender->buffer) + curr_sender->bytes_unread;
               memmove(next_free_slot, incoming_buffer + MRT_PAYLOAD_LOCATION, payload_size);
@@ -426,7 +433,7 @@ void *checker(void *sender_vp) {
         break;
       }
     pthread_mutex_unlock(&q_lock);
-    sleep(CHECKER_PERIOD);
+    usleep(CHECKER_PERIOD);
   }
   // garbage collection
   pthread_mutex_lock(&q_lock);

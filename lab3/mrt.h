@@ -38,7 +38,8 @@
 #define MAX_MRT_PAYLOAD_LENGTH   (MAX_UDP_PAYLOAD_LENGTH - MRT_HEADER_LENGTH)
 
 // consistently less than 0.4ms with `ping -s 64000 localhost`
-#define EXPECTED_RTT             10
+// average RTT is about 100ms to Google... so...
+#define EXPECTED_RTT             100000  // MICROSECONDS... for usleep()
 
 // variables initialized in mrt.c; for memmove() use
 const int unkn_type;

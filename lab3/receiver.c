@@ -14,7 +14,7 @@
 #include "Queue.h"
 #include "mrt_receiver.h"
 
-#define PORT_NUMBER 4242
+#define RECEIVER_PORT_NUMBER 7878
 #define BUFFER_SIZE 1000
 
 int main(int argc, char const *argv[]) {
@@ -32,7 +32,7 @@ int main(int argc, char const *argv[]) {
     return -1;
   }
 
-  if (mrt_open(PORT_NUMBER) < 0) {
+  if (mrt_open(RECEIVER_PORT_NUMBER) < 0) {
     perror("mrt_open() error...\n");
     return -1;
   }

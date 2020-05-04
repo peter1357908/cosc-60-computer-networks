@@ -22,5 +22,14 @@ sender: sender.c mrt_sender.c mrt_sender.h $(OPAQUE_C) $(OPAQUE_H)
 receiver: receiver.c mrt_receiver.c mrt_receiver.h $(OPAQUE_C) $(OPAQUE_H)
 	$(CC) $(CFLAGS) -o receiver receiver.c mrt_receiver.c $(OPAQUE_C) -lpthread
 
+test_sender1: sender
+	@./sender 4242
+
+test_sender2: sender
+	@./sender 9999
+
+test_receiver: receiver
+	@./receiver 2
+
 clean:
 	rm -f $(ALL)

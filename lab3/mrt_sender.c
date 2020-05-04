@@ -4,10 +4,14 @@
  * By Shengsong Gao, April 2020.
  */
 
+// the following two includes are necessary for usleep()
+#define _XOPEN_SOURCE   600
+#define _POSIX_C_SOURCE 200112L
+
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h> // exit(), calloc(), free()
-#include <unistd.h> // close(), sleep()
+#include <unistd.h> // close(), usleep()
 #include <sys/socket.h>
 #include <arpa/inet.h> // htons()
 #include <pthread.h>
@@ -30,7 +34,8 @@
 typedef struct connection {
   int id;
   int send_sockfd;
-  struct sockaddr_in rece_addr;
+  struct sockaddr_in send_addr;  // bind to this address; listening on it
+  struct sockaddr_in rece_addr;  // send data to this address
 
   int last_sent_index;
   int last_payload_index; // must be below MAX_PAYLOADS_BUFFERABLE
@@ -72,7 +77,7 @@ typedef struct connection {
 void *handler(void *conn_vp);
 void *sender(void *conn_vp);
 void *checker(void *conn_vp);
-connection_t *connection_t_init(unsigned short port_number, unsigned long s_addr);
+connection_t *connection_t_init(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned long receiver_s_addr);
 void connection_t_free(connection_t *conn_p);
 int connection_matcher(void *connection_vp, void *id_vp);
 void build_rcon(char *outgoing_buffer);
@@ -98,7 +103,7 @@ pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
  * `(struct sockaddr_in).sin_addr.s_addr`
  * `s_addr` will be put inside `htonl()` before use
  */
-int mrt_connect(unsigned short port_number, unsigned long s_addr) {
+int mrt_connect(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned long s_addr) {
   /****** initializing the module if not done so yet ******/
   pthread_mutex_lock(&q_lock);
   if (connections_q == NULL) {
@@ -111,7 +116,7 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr) {
   pthread_mutex_unlock(&q_lock);
   
   /****** initialize a new connection struct and queue it ******/
-  connection_t *curr_conn = connection_t_init(port_number, s_addr);
+  connection_t *curr_conn = connection_t_init(sender_port_number, receiver_port_number, s_addr);
   if (curr_conn == NULL) {
     perror ("connection_t_init() failed\n");
     return -1;
@@ -144,7 +149,7 @@ int mrt_connect(unsigned short port_number, unsigned long s_addr) {
           0, (const struct sockaddr *)(&(curr_conn->rece_addr)), 
           addr_len);
     pthread_mutex_unlock(&(curr_conn->outgoing_lock));
-    sleep(RCON_PERIOD);
+    usleep(RCON_PERIOD);
   }
   
   return curr_conn->id;
@@ -233,7 +238,7 @@ int mrt_send(int id, char *buffer, int len) {
       pthread_mutex_unlock(&(conn_p->buffer_lock));
     } else {
       // done copying already; go to sleep...
-      sleep(MRT_SEND_PERIOD);
+      usleep(MRT_SEND_PERIOD);
     }
   }
   // TODO: num_bytes_copied SHOULD be equal to len now...
@@ -275,7 +280,7 @@ void mrt_disconnect(int id) {
       break;
     }
     pthread_mutex_unlock(&(conn_p->buffer_lock));
-    sleep(MRT_DISCONNECT_PERIOD);
+    usleep(MRT_DISCONNECT_PERIOD);
   }
 
   // NOW send RCLS...
@@ -315,6 +320,7 @@ void *handler(void *conn_vp) {
     num_bytes_received = recvfrom(conn_p->send_sockfd, conn_p->incoming_buffer,
                       MRT_HEADER_LENGTH, 0, (struct sockaddr *)(&addr_holder),
                       &addr_len_holder);
+    
 
     // before processing, check if close is flagged
     pthread_mutex_lock(&(conn_p->close_lock));
@@ -330,6 +336,7 @@ void *handler(void *conn_vp) {
 
     // first validate the transmission with checksum
     memmove(&hash_holder, conn_p->incoming_buffer, MRT_HASH_LENGTH);
+
     if (hash(conn_p->incoming_buffer + MRT_HASH_LENGTH) != hash_holder) {
       printf("sender %d: transmission discarded due to checksum mismatch\n", conn_p->id);
       continue;
@@ -339,6 +346,10 @@ void *handler(void *conn_vp) {
     memmove(&type_holder, conn_p->incoming_buffer + MRT_TYPE_LOCATION, MRT_TYPE_LENGTH);
     memmove(&frag_holder, conn_p->incoming_buffer + MRT_FRAGMENT_LOCATION, MRT_FRAGMENT_LENGTH);
     memmove(&winsize_holder, conn_p->incoming_buffer + MRT_WINDOWSIZE_LOCATION, MRT_WINDOWSIZE_LENGTH);
+    
+    // DEBUG
+    printf("len=%d, type=%d, frag=%d, winsize=%d\n", num_bytes_received, type_holder, frag_holder, winsize_holder);
+
     switch (type_holder) {
       
       case MRT_ACON :
@@ -465,7 +476,7 @@ void *sender(void *conn_vp) {
               0, (const struct sockaddr *)(&(conn_p->rece_addr)), 
               addr_len);
       pthread_mutex_unlock(&(conn_p->outgoing_lock));
-      sleep(EMPTY_DATA_PERIOD);
+      usleep(EMPTY_DATA_PERIOD);
     } else {
       // the sender has something to send; reset timer
       resend_time = 0;
@@ -504,7 +515,7 @@ void *checker(void *conn_vp) {
       break;
       }
     pthread_mutex_unlock(&(conn_p->timeout_lock));
-    sleep(CLOSE_TIMEOUT_INCREMENT);
+    usleep(CLOSE_TIMEOUT_INCREMENT);
   }
   // TODO: any garbage collection necessary?
   return NULL;
@@ -515,7 +526,7 @@ void *checker(void *conn_vp) {
 /* initialize a new connection struct and returns its pointer
  * the caller is responsible for freeing it.
  */
-connection_t *connection_t_init(unsigned short port_number, unsigned long s_addr) {
+connection_t *connection_t_init(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned long receiver_s_addr) {
   connection_t *connection_p = calloc(1, sizeof(connection_t));
 
   if (connection_p == NULL) { return NULL; }
@@ -530,11 +541,21 @@ connection_t *connection_t_init(unsigned short port_number, unsigned long s_addr
   connection_p->send_sockfd = socket(AF_INET, SOCK_DGRAM, 0);
   if (connection_p->send_sockfd < 0) { return NULL; }
 
-  connection_p->id = next_id++;
+  connection_p->send_addr.sin_family = AF_INET;
+  connection_p->send_addr.sin_port = htons(sender_port_number);
+  connection_p->send_addr.sin_addr.s_addr = htonl(INADDR_ANY);
   
+  // Yup... it's gonna be listenin', too. I forgot about this.
+  if (bind(connection_p->send_sockfd, (struct sockaddr *)&(connection_p->send_addr), addr_len) < 0) {
+    perror("bind(connection_p->send_sockfd) error\n");
+    return NULL;
+  }
+
+  connection_p->id = next_id++;
+
   connection_p->rece_addr.sin_family = AF_INET;
-  connection_p->rece_addr.sin_port = htons(port_number);
-  connection_p->rece_addr.sin_addr.s_addr = htonl(s_addr);
+  connection_p->rece_addr.sin_port = htons(receiver_port_number);
+  connection_p->rece_addr.sin_addr.s_addr = htonl(receiver_s_addr);
 
   connection_p->last_sent_index = -1;
   connection_p->last_payload_index = -1;

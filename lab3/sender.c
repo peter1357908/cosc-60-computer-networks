@@ -1,22 +1,30 @@
 /* The sender application testing the mrt_sender module
  *
  * command line:
- *	sender
+ *	sender sender_port_number
  *
  * For Dartmouth COSC 60 Lab 3;
  * By Shengsong Gao, May 2020.
  */
 
 #include <stdio.h>
+#include <stdlib.h> // atoi()
 #include <string.h>
 #include <netinet/in.h>  // INADDR_LOOPBACK
 #include "mrt_sender.h"
 
-#define PORT_NUMBER 4242
+#define RECEIVER_PORT_NUMBER 7878
 #define BUFFER_SIZE 1000
 
 int main(int argc, char const *argv[]) {
-  int id = mrt_connect(PORT_NUMBER, INADDR_LOOPBACK);
+  /****** parsing arguments ******/
+	if (argc != 2) {
+		fprintf(stderr, "usage: %s sender_port_number\n", argv[0]);
+		return -1;
+	}
+	unsigned short sender_port_number = (unsigned short)(atoi(argv[1]));
+
+  int id = mrt_connect(sender_port_number, RECEIVER_PORT_NUMBER, INADDR_LOOPBACK);
 
   if (id < 0) {
     perror("mrt_connect() failed...\n");
