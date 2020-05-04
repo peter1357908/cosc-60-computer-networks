@@ -97,7 +97,7 @@
 
 1. Files that contain the implementation of the nine primary MRT abstractions
 
-`mrt_sender.c` and `mrt_receiver.c` contain the actual code while `mrt_sender.h` and `mrt_receiver.h` are the header files for the abstracted methods available to `mrt` module users (you can find detailed usage info in those header files). `mrt.h` contains protocol-level definitions useful to both the sender module and the receiver module (but should be opaque to MRT users).
+  `mrt_sender.c` and `mrt_receiver.c` contain the actual code while `mrt_sender.h` and `mrt_receiver.h` are the header files for the abstracted methods available to `mrt` module users (you can find detailed usage info in those header files). `mrt.h` contains protocol-level definitions useful to both the sender module and the receiver module (but should be opaque to MRT users).
 
 ## Notable implementation choices:
 
