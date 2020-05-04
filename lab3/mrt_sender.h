@@ -18,12 +18,19 @@
  */
 int mrt_connect(unsigned short port_number, unsigned long s_addr);
 
-/* returns the number of bytes successfully sent (acknowledged).
- * will block until the corresponding final ADAT is processed (large
- * enough data will be split into multiple fragments)
+/* Returns 1 if all bytes are successfully sent (acknowledged).
+ * Will block until the corresponding final ADAT is processed (large
+ * enough data will be split into multiple fragments).
+ *
+ * Returns 0 if the call ends prematurely due to the connection
+ * being dropped 
+ * TODO: any efficient way to tell the acknowledged bytes in this case?
  *
  * Returns -1 if the call is spurious (connection not accepted yet,
  * mrt_open() not even called yet, etc.)
+ *
+ * Does not support getting called multiple times concurrently
+ * for the same connection (undefined behavior if attempted).
  */
 int mrt_send(int id, char *buffer, int len);
 
