@@ -39,7 +39,7 @@
 
 // consistently less than 0.4ms with `ping -s 64000 localhost`
 // average RTT is about 100ms to Google... so...
-#define EXPECTED_RTT             1000000  // MICROSECONDS... for usleep()
+#define EXPECTED_RTT             10000  // MICROSECONDS... for usleep()
 
 // variables initialized in mrt.c; for memmove() use
 const int unkn_type;

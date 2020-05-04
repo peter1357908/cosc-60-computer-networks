@@ -9,7 +9,7 @@
 
 #include <stdio.h>
 #include <stdlib.h> // atoi(), free()
-#include <string.h>
+#include <unistd.h> // write(), STDOUT_FILENO
 #include <sys/socket.h>  // (struct sockaddr_in)
 #include "Queue.h"
 #include "mrt_receiver.h"
@@ -42,7 +42,7 @@ int main(int argc, char const *argv[]) {
    */
 
   struct sockaddr_in *curr_sender_id = NULL;
-  char buffer[BUFFER_SIZE + 1]; // +1 for '\0'
+  char buffer[BUFFER_SIZE];
   int i, num_bytes_read;
 
   for (i = 0; i < num_connections; i++) {
@@ -53,8 +53,7 @@ int main(int argc, char const *argv[]) {
     curr_sender_id = deq_q(sender_id_q);
     
     while ((num_bytes_read = mrt_receive1(curr_sender_id, buffer, BUFFER_SIZE)) > 0) {
-      buffer[num_bytes_read] = '\0';
-      printf("%s", buffer);
+      write(STDOUT_FILENO, buffer, num_bytes_read);
     }
     
     free(curr_sender_id);

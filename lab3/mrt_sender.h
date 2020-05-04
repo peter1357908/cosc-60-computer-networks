@@ -8,7 +8,7 @@
 #ifndef _mrt_sender_h
 #define _mrt_sender_h
 
-/* returns the connection ID (int; positive)
+/* returns the connection ID (int; non-negative)
  * returns -1 upon any error
  * will block until the connection is established
  *

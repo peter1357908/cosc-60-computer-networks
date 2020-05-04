@@ -95,7 +95,7 @@ pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /****** functions ******/
 
-/* returns the connection ID (int; positive)
+/* returns the connection ID (int; non-negative)
  * returns -1 upon any error
  * will block until the connection is established
  *

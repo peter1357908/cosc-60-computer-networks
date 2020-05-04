@@ -184,15 +184,16 @@ q_t *mrt_accept_all() {
 }
 
 /* Moves to `buffer` at least 1 byte of data and as much as specified
- * in `len` as long as the connection remains open. Will block and wait
+ * in `len` as long as mrt_close() is not called. Will block and wait
  * until there is data.
  *
  * Returns the number of bytes written.
- * Returns 0 if the connection dies while waiting for data
+ * Returns 0 if the receiver is closed while waiting for data or if
+ * the connection times out without having received any bytes yet
+ * 
  * Returns -1 if the call is spurious (connection not accepted yet,
  * mrt_open() not even called yet, etc.)
  */
- // TODO: use CVAR instead of spurious sleep wakeups
 int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len) {
   sender_t *curr_sender = NULL;
   pthread_mutex_lock(&q_lock);
@@ -215,6 +216,10 @@ int mrt_receive1(struct sockaddr_in *id_p, void *buffer, int len) {
 
       // the connection remains; now either sleep or perform the copy
       if (curr_sender->bytes_unread <= 0) {
+        if(curr_sender->inactive_time > TIMEOUT_THRESHOLD) {
+    pthread_mutex_unlock(&q_lock);
+          return 0;
+        }
     pthread_mutex_unlock(&q_lock);
         usleep(RECEIVE1_PERIOD);
         continue; // just to be safe
@@ -434,10 +439,10 @@ void *checker(void *sender_vp) {
     pthread_mutex_unlock(&q_lock);
     usleep(CHECKER_PERIOD);
   }
-  // garbage collection
-  pthread_mutex_lock(&q_lock);
-    free(pop_item_q(connected_senders_q, sender_matcher, &(sender_p->addr)));
-  pthread_mutex_unlock(&q_lock);
+  // garbage collection (SKIP THIS SO BUFFER REMAINS AVAILABLE)
+  // pthread_mutex_lock(&q_lock);
+  //   free(pop_item_q(connected_senders_q, sender_matcher, &(sender_p->addr)));
+  // pthread_mutex_unlock(&q_lock);
 
   return NULL;
 }
