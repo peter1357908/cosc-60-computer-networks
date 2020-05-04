@@ -103,7 +103,7 @@ pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;
  * `(struct sockaddr_in).sin_addr.s_addr`
  * `s_addr` will be put inside `htonl()` before use
  */
-int mrt_connect(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned long s_addr) {
+int mrt_connect(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned int s_addr) {
   /****** initializing the module if not done so yet ******/
   pthread_mutex_lock(&q_lock);
   if (connections_q == NULL) {
@@ -314,9 +314,9 @@ void mrt_disconnect(int id) {
 void *handler(void *conn_vp) {
   connection_t *conn_p = (connection_t *)conn_vp;
   int num_bytes_received = 0;
-  struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
+  struct sockaddr_in addr_holder = {0}; // to be used in recvfrom() only
   unsigned long hash_holder = 0;
-  unsigned int addr_len_holder = 0;
+  unsigned int addr_len_holder = addr_len; // MUST BE addr_len... semantically...
   int type_holder = 0, frag_holder = 0, winsize_holder = 0;
   int frag_difference = 0, num_remaining_bytes = 0;
   char *remaining_bytes_location = NULL;
@@ -327,7 +327,6 @@ void *handler(void *conn_vp) {
                       MRT_HEADER_LENGTH, 0, (struct sockaddr *)(&addr_holder),
                       &addr_len_holder);
     
-
     // before processing, check if close is flagged
     pthread_mutex_lock(&(conn_p->close_lock));
     if (conn_p->should_close == 1) {

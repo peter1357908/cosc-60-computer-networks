@@ -273,7 +273,7 @@ void *main_handler(void *_null) {
   sender_t *curr_sender = NULL;
   struct sockaddr_in addr_holder = {0}; // to hold the addr of incoming transmission
   unsigned long hash_holder = 0;
-  unsigned int addr_len_holder = 0;
+  unsigned int addr_len_holder = addr_len; // VERY IMPORTANT NOT TO BE ZERO
   int type_holder = 0, frag_holder = 0;
 
   // the main loop; processes all the incoming transmissions
@@ -305,11 +305,8 @@ void *main_handler(void *_null) {
     memmove(&type_holder, incoming_buffer + MRT_TYPE_LOCATION, MRT_TYPE_LENGTH);
     memmove(&frag_holder, incoming_buffer + MRT_FRAGMENT_LOCATION, MRT_FRAGMENT_LENGTH);
 
-    // DEBUG
-    printf("len=%d, type=%d, frag=%d, data=%s\n", num_bytes_received, type_holder, frag_holder, incoming_buffer);
-
     switch (type_holder) {
-      
+
       case MRT_RCON :
         // if the sender is not queued...
         pthread_mutex_lock(&q_lock);
@@ -439,9 +436,8 @@ void *checker(void *sender_vp) {
   }
   // garbage collection
   pthread_mutex_lock(&q_lock);
-    pop_item_q(connected_senders_q, sender_matcher, &(sender_p->addr));
+    free(pop_item_q(connected_senders_q, sender_matcher, &(sender_p->addr)));
   pthread_mutex_unlock(&q_lock);
-  free(sender_p);
 
   return NULL;
 }
@@ -457,6 +453,16 @@ void *checker(void *sender_vp) {
 int sender_matcher(void *sender_vp, void *id_vp) {
   sender_t *sender_p = (sender_t *)sender_vp;
   struct sockaddr_in *id_p = (struct sockaddr_in *)id_vp;
+
+  // printf( "sin_family: %hd vs %hd\n"
+  //         "sin_port: %hu vs %hu\n"
+  //         "sin_addr.s_addr: %u vs %u\n"
+  //         "sin_zero: %8s vs %8s\n",
+  //         sender_p->addr.sin_family, id_p->sin_family,
+  //         sender_p->addr.sin_port, id_p->sin_port,
+  //         sender_p->addr.sin_addr.s_addr, id_p->sin_addr.s_addr,
+  //         sender_p->addr.sin_zero, id_p->sin_zero
+  //         );
 
   if (memcmp(&(sender_p->addr), id_p, addr_len) == 0) {
     return 1;

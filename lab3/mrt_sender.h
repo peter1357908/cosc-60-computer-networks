@@ -16,7 +16,7 @@
  * `(struct sockaddr_in).sin_addr.s_addr`
  * `s_addr` will be put inside `htonl()` before use
  */
-int mrt_connect(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned long s_addr);
+int mrt_connect(unsigned short sender_port_number, unsigned short receiver_port_number, unsigned int s_addr);
 
 /* Returns 1 if all bytes are successfully sent (acknowledged).
  * Will block until the corresponding final ADAT is processed (large
