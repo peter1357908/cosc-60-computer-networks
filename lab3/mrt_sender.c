@@ -343,7 +343,6 @@ void *handler(void *conn_vp) {
     memmove(&hash_holder, conn_p->incoming_buffer, MRT_HASH_LENGTH);
 
     if (hash(conn_p->incoming_buffer + MRT_HASH_LENGTH) != hash_holder) {
-      printf("sender %d: transmission discarded due to checksum mismatch\n", conn_p->id);
       continue;
     }
 
@@ -412,7 +411,6 @@ void *handler(void *conn_vp) {
 
       default :
         // RCON, DATA, RCLS, UNKN
-        printf("sender %d: transmission had good checksum but bad type (%d).\n HOW????\n", conn_p->id, type_holder);
         continue;
     }
   }

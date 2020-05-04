@@ -302,7 +302,6 @@ void *main_handler(void *_null) {
     // first validate the transmission with checksum
     memmove(&hash_holder, incoming_buffer, MRT_HASH_LENGTH);
     if (hash(incoming_buffer + MRT_HASH_LENGTH) != hash_holder) {
-      printf("transmission discarded due to checksum mismatch\n");
       continue;
     }
 
@@ -359,7 +358,10 @@ void *main_handler(void *_null) {
               curr_sender->next_frag += 1;
               curr_window_size -= payload_size;
             }
-            // else the packet must be dropped (out of order / buffer space)
+            // else {
+            //   // else the packet must be dropped (out of order / buffer space)
+            //   printf("out of order / buffer space \n");
+            // }
 
             /* either way, sender just proved that he's still connected,
              * so reset the inactivity counter and replies with ADAT
@@ -400,7 +402,6 @@ void *main_handler(void *_null) {
 
       default :
         // ACON, ADAT, ACLS, UNKN
-        printf("transmission had good checksum but bad type = %d\n HOW????\n", type_holder);
         continue;
     }
   }
