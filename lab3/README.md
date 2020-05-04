@@ -21,6 +21,13 @@
 * timeout counter for closing is automatically incremented; each incoming transmission resets the corresponding timeout counter. If no transmission occurs for a period of time, the counter will be let to exceed the timeout threshold and cause the connection to be dropped.
 
 ## Lab question responses
+
+#### Testing in general
+
+
+
+#### Actual response
+
 1. How I tested against packet loss
 
 

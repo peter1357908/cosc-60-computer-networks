@@ -31,19 +31,26 @@ test_sender1: sender
 test_sender2: sender
 	@./sender 9999 20
 
+test_receiver2: receiver
+	@./receiver 2
+
 test_sender_comma: sender number_writer
 	@./number_writer 2000 1 | ./sender 4343 1000
 
-test_sender_newline: sender number_writer
-	@./number_writer 2000 0 | ./sender 4444 20
-
-test_receiver1: receiver number_writer
+test_receiver_comma: receiver number_writer
 	@./receiver 1 > output
 	@./number_writer 2000 1 > supposed_output
 	@diff output supposed_output
 
-test_receiver2: receiver
-	@./receiver 2
+test_sender_newline: sender number_writer
+	@./number_writer 200 0 | ./sender 4444 20
+
+test_receiver_newline: receiver number_writer
+	@./receiver 1 > output
+	@./number_writer 200 0 > supposed_output
+	@diff output supposed_output
+
+
 
 clean:
 	@rm -f $(ALL)
