@@ -1,7 +1,6 @@
-# makefile for the multi-sender TCP local chatroom
-# employing the custom-made Dual-Purpose Protocol.
+# makefile for the MRT module and its test drivers.
 #
-# For Dartmouth COSC 60 Lab 2;
+# For Dartmouth COSC 60 Lab 3;
 # By Shengsong Gao, 2020.
 #
 
@@ -24,6 +23,7 @@ receiver: receiver.c mrt_receiver.c mrt_receiver.h $(OPAQUE_C) $(OPAQUE_H)
 
 number_writer: number_writer.c
 	@$(CC) $(CFLAGS) -o number_writer number_writer.c
+
 
 test_sender1: sender
 	@./sender 4242 1000
@@ -49,7 +49,6 @@ test_receiver_newline: receiver number_writer
 	@./receiver 1 > output
 	@./number_writer 200 0 > supposed_output
 	@diff output supposed_output
-
 
 
 clean:
