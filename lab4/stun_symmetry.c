@@ -37,6 +37,10 @@ unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
 int client_sockfd;
 char request_buffer[STUN_BUFFER_SIZE] = {0};
 
+char nat_ipv4_holder[HOSTNAME_HOLDER_SIZE] = {0};
+unsigned short nat_port_holder = 0;
+int is_behind_symmetric_nat = 0;
+
 /****** main ******/
 int main() {
   // open up a socket
@@ -112,6 +116,19 @@ void *response_handler(void *_nil) {
             nat_addr_holder.sin_addr.s_addr = ((uint32_t *)response_attribute_location)[2];
             getnameinfo((struct sockaddr *)(&nat_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
             printf("FOUND IPv4 MAPPED-ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(nat_addr_holder.sin_port));
+            
+            // if first time seeing an address...
+            if (nat_ipv4_holder[0] == '\0') {
+              memmove(nat_ipv4_holder, hostname_holder, INET_ADDRSTRLEN);
+              nat_port_holder = ntohs(nat_addr_holder.sin_port);
+            } else {
+              // otherwise check if it's different from the first one...
+              if (strncmp(nat_ipv4_holder, hostname_holder, INET_ADDRSTRLEN) != 0
+                  || nat_port_holder != ntohs(nat_addr_holder.sin_port)) {
+                is_behind_symmetric_nat = 1;
+                printf("Different MAPPED-ADDRESS discovered! The first one is %s:%hu while this one is %s:%hu", nat_ipv4_holder, nat_port_holder, hostname_holder, ntohs(nat_addr_holder.sin_port));
+              }
+            }
           }
           // check if it is an XOR-MAPPED-ADDRESS
           else if (((uint16_t *)response_attribute_location)[0] == htons(0x0020)) {
@@ -123,6 +140,19 @@ void *response_handler(void *_nil) {
             nat_addr_holder.sin_addr.s_addr = (xor_addr ^ stun_magic_cookie);
             getnameinfo((struct sockaddr *)(&nat_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
             printf("FOUND IPv4 XOR-MAPPED-ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(nat_addr_holder.sin_port));
+
+            // if first time seeing an address...
+            if (nat_ipv4_holder[0] == '\0') {
+              memmove(nat_ipv4_holder, hostname_holder, INET_ADDRSTRLEN);
+              nat_port_holder = ntohs(nat_addr_holder.sin_port);
+            } else {
+              // otherwise check if it's different from the first one...
+              if (strncmp(nat_ipv4_holder, hostname_holder, INET_ADDRSTRLEN) != 0
+                  || nat_port_holder != ntohs(nat_addr_holder.sin_port)) {
+                is_behind_symmetric_nat = 1;
+                printf("Different MAPPED-ADDRESS discovered! The first one is %s:%hu while this one is %s:%hu", nat_ipv4_holder, nat_port_holder, hostname_holder, ntohs(nat_addr_holder.sin_port));
+              }
+            }
           }
           else {
             // puts("FOUND irrelevant attribute...");
@@ -146,6 +176,20 @@ void *response_handler(void *_nil) {
       perror("num_bytes_received <= 0\n");
       i--;
     }
+  }
+
+  if (is_behind_symmetric_nat == 1) {
+    puts("\nYou are behind a symmetric NAT! There is no way your peer\n"
+         "can find you... but you can try finding your peers!\n"
+         "(Your translated address changes for every new destination.)\n");
+  } else {
+    printf("\nYou are likely not behind a symmetric NAT! Run \n"
+           "`make test_cone_level` to find out which cone level\n"
+           "of NAT you are behind!\n"
+           "As of this test using untranslated port of %hu, your\n"
+           "translated address is:\n"
+           "\n`%s:%hu`\n",
+           STUN_CLIENT_PORT, nat_ipv4_holder, nat_port_holder);
   }
 
   return NULL;

@@ -2,6 +2,8 @@
  * tests the level of the user's NAT cone (if it's not symmetric)
  *
  * Completely reliant on `77.72.169.210:3478` being alive.
+ *
+ * If no messages are printed, the user is behind a Port Restricted NAT
  *	
  * For Dartmouth COSC 60 Lab 4;
  * By Shengsong Gao, May 2020.
@@ -41,6 +43,8 @@ int num_response_expected = 4;
 unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
 int client_sockfd;
 char request_buffer[STUN_BUFFER_SIZE] = {0};
+char *original_server_ipv4 = "77.72.169.210";
+unsigned short original_server_port = 3478;
 
 /****** main ******/
 int main() {
@@ -69,11 +73,11 @@ int main() {
   // build the STUN server address
   struct sockaddr_in stun_server_addr = {0};
   stun_server_addr.sin_family = AF_INET;
-  if (inet_pton(AF_INET,  "77.72.169.210", &(stun_server_addr.sin_addr)) != 1) {
+  if (inet_pton(AF_INET, original_server_ipv4, &(stun_server_addr.sin_addr)) != 1) {
     perror("inet_pton() failed\n");
     return -1;
   }
-  stun_server_addr.sin_port = htons(3478);
+  stun_server_addr.sin_port = htons(original_server_port);
 
   /* TODO: write code that expect the changed port by sending an
    * attribute-less binding request first.
@@ -110,19 +114,22 @@ int main() {
 // assumes that the received messages are all STUN messages
 void *response_handler(void *_nil) {
   char response_buffer[STUN_BUFFER_SIZE] = {0}; // in network byte order
-  struct sockaddr_in addr_holder = {0};
   unsigned int addr_len_holder = addr_len;
-  char hostname_holder[HOSTNAME_HOLDER_SIZE] = {0}; // holds IPv4 addresses
+  char server_hostname_holder[HOSTNAME_HOLDER_SIZE] = {0};
+  char attr_hostname_holder[HOSTNAME_HOLDER_SIZE] = {0}; // holds IPv4 addresses
+  
+  struct sockaddr_in server_addr_holder = {0};
   struct sockaddr_in attr_addr_holder = {0};
   attr_addr_holder.sin_family = AF_INET; // getnameinfo() needs this filled
 
   for (int i = 0; i < num_response_expected; i++) {
     int num_bytes_received = recvfrom(client_sockfd, response_buffer,
-                      STUN_BUFFER_SIZE, 0, (struct sockaddr *)(&addr_holder),
+                      STUN_BUFFER_SIZE, 0, (struct sockaddr *)(&server_addr_holder),
                       &addr_len_holder);
 
-    getnameinfo((struct sockaddr *)(&addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
-    printf("%s responded:\n", hostname_holder);
+    getnameinfo((struct sockaddr *)(&server_addr_holder), addr_len, server_hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
+    printf("%s responded:\n", server_hostname_holder);
+
     if (num_bytes_received > 0) {
       uint16_t num_bytes_attributes = ntohs(((uint16_t *)response_buffer)[1]);
       char *response_attribute_location = response_buffer + STUN_HEADER_SIZE;
@@ -134,7 +141,6 @@ void *response_handler(void *_nil) {
         uint16_t index = 0;
         while (index < num_bytes_attributes) {
           response_attribute_location += index;
-          // TODO: why at the third attribute, the length becomes 0????????
           uint16_t attribute_length = ntohs(((uint16_t *)response_attribute_location)[1]);
           // printf("attribute_length=%hu\n", attribute_length);
           uint16_t attribute_type_network_byte = ((uint16_t *)response_attribute_location)[0];
@@ -142,20 +148,44 @@ void *response_handler(void *_nil) {
             // attr_addr_holder here means `nat_addr_holder` or `mapped_addr_holder`
             attr_addr_holder.sin_port = ((uint16_t *)response_attribute_location)[3];
             attr_addr_holder.sin_addr.s_addr = ((uint32_t *)response_attribute_location)[2];
-            getnameinfo((struct sockaddr *)(&attr_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
-            printf("FOUND IPv4 MAPPED-ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(attr_addr_holder.sin_port));
+            getnameinfo((struct sockaddr *)(&attr_addr_holder), addr_len, attr_hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
+            printf("FOUND IPv4 MAPPED-ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", attr_hostname_holder, ntohs(attr_addr_holder.sin_port));
+
+            // assumes that each message has at most one MAPPED-ADDRESS attribute
+            // check if the port number is different than the original
+            if (htons(original_server_port) != server_addr_holder.sin_port) {
+              // if the IP number is also different...
+              if (strncmp(server_hostname_holder, original_server_ipv4, INET_ADDRSTRLEN) != 0) {
+                printf("\nCongratulations! You are behind a Full Cone NAT!\n"
+                      "If this socket is kept open, your peers can reach you at\n"
+                      "this address:\n"
+                      "\n%s:%hu\n",
+                      attr_hostname_holder, ntohs(attr_addr_holder.sin_port));
+              }
+              // if the IP number is the same...
+              else {
+                printf("\nHmm. You are at least behind a Restricted Cone NAT,\n"
+                      "and definitely not behind a Port Restricted Cone NAT.\n"
+                      "If you don\'t see a message indicating that you are behind\n"
+                      "a full cone NAT, then you really are behind a Festricted\n" "Cone NAT - under such NAT, your peers cannot find you, but\n"
+                      "you can try finding your peers... Your address here is:\n"
+                      "\n%s:%hu\n",
+                      attr_hostname_holder, ntohs(attr_addr_holder.sin_port));
+              }
+            }
+
           } else if (attribute_type_network_byte == htons(0x0004)) {
             // attr_addr_holder here means `source_addr_holder`
             attr_addr_holder.sin_port = ((uint16_t *)response_attribute_location)[3];
             attr_addr_holder.sin_addr.s_addr = ((uint32_t *)response_attribute_location)[2];
-            getnameinfo((struct sockaddr *)(&attr_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
-            printf("FOUND IPv4 SOURCE-ADDRESS:\nSOURCE IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(attr_addr_holder.sin_port));
+            getnameinfo((struct sockaddr *)(&attr_addr_holder), addr_len, attr_hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
+            printf("FOUND IPv4 SOURCE-ADDRESS:\nSOURCE IP: %s, NAT PORT: %hu\n", attr_hostname_holder, ntohs(attr_addr_holder.sin_port));
           } else if (attribute_type_network_byte == htons(0x0005)) {
             // attr_addr_holder here means `source_addr_holder`
             attr_addr_holder.sin_port = ((uint16_t *)response_attribute_location)[3];
             attr_addr_holder.sin_addr.s_addr = ((uint32_t *)response_attribute_location)[2];
-            getnameinfo((struct sockaddr *)(&attr_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
-            printf("FOUND IPv4 CHANGED-ADDRESS:\nSOURCE IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(attr_addr_holder.sin_port));
+            getnameinfo((struct sockaddr *)(&attr_addr_holder), addr_len, attr_hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
+            printf("FOUND IPv4 CHANGED-ADDRESS:\nSOURCE IP: %s, NAT PORT: %hu\n", attr_hostname_holder, ntohs(attr_addr_holder.sin_port));
           } else {
             puts("FOUND irrelevant attribute...");
           }
