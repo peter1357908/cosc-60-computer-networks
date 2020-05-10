@@ -22,18 +22,24 @@
 #define STUN_BUFFER_SIZE        (STUN_HEADER_SIZE + 1000)
 #define HOSTNAME_HOLDER_SIZE    100
 
+/****** function declarations ******/
 void *response_handler(void *);
 void build_binding_request();
 void send_request_to(const char *, uint16_t);
 
+/****** global variables ******/
+/* 4 from stun.voipstunt.com:3478
+ * 5 from 5 google STUN servers (RegEx: stun?.l.google.com:19302)
+ */
+int num_response_expected = 9;
 unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
 int client_sockfd;
-int num_stun_servers = 9;
 char request_buffer[STUN_BUFFER_SIZE] = {0};
 
 int should_close = 0;
 pthread_mutex_t should_close_lock;
 
+/****** main ******/
 int main() {
   // open up a socket
   if ((client_sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) { 
@@ -78,40 +84,52 @@ void *response_handler(void *_nil) {
   unsigned int addr_len_holder = addr_len;
   char hostname_holder[HOSTNAME_HOLDER_SIZE] = {0}; // holds IPv4 addresses
   struct sockaddr_in nat_addr_holder = {0};
-  nat_addr_holder.sin_family = AF_INET; // IPv4 only...
+  nat_addr_holder.sin_family = AF_INET; // getnameinfo() needs this filled
 
-  for (int i = 0; i < num_stun_servers; i++) {
+  for (int i = 0; i < num_response_expected; i++) {
     int num_bytes_received = recvfrom(client_sockfd, response_buffer,
                       STUN_BUFFER_SIZE, 0, (struct sockaddr *)(&addr_holder),
                       &addr_len_holder);
 
     getnameinfo((struct sockaddr *)(&addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
-    printf("Message received from %s\n", hostname_holder);
+    printf("STUN server %s responded:\n", hostname_holder);
     if (num_bytes_received > 0) {
       uint16_t num_bytes_attributes = ntohs(((uint16_t *)response_buffer)[1]);
       char *response_attribute_location = response_buffer + STUN_HEADER_SIZE;
-      printf("Attributes portion has %hu bytes\n", num_bytes_attributes);
+      // printf("Attributes portion has %hu bytes\n", num_bytes_attributes);
 
       if (((uint16_t *)response_buffer)[0] == htons(0x0101)) {
         // Binding Response (success); assumes that own address is IPv4
-        puts("\'Binding Response\' (SUCCESS) received, start iterating through attributes");
+        // puts("\'Binding Response\' (SUCCESS) received, start iterating through attributes");
         uint16_t index = 0;
         while (index < num_bytes_attributes) {
           response_attribute_location += index;
+          // TODO: why at the third attribute, the length becomes 0????????
           uint16_t attribute_length = ntohs(((uint16_t *)response_attribute_location)[1]);
-          printf("attribute_length=%hu\n", attribute_length);
-          // check if it is a MAPPED_ADDRESS
+          // printf("attribute_length=%hu\n", attribute_length);
+          // check if it is a MAPPED-ADDRESS
           if (((uint16_t *)response_attribute_location)[0] == htons(0x0001)) {
             nat_addr_holder.sin_port = ((uint16_t *)response_attribute_location)[3];
             nat_addr_holder.sin_addr.s_addr = ((uint32_t *)response_attribute_location)[2];
             getnameinfo((struct sockaddr *)(&nat_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
-            printf("FOUND IPv4 MAPPED_ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(nat_addr_holder.sin_port));
+            printf("FOUND IPv4 MAPPED-ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(nat_addr_holder.sin_port));
+          }
+          // check if it is an XOR-MAPPED-ADDRESS
+          else if (((uint16_t *)response_attribute_location)[0] == htons(0x0020)) {
+            uint32_t stun_magic_cookie = htonl(0x2112A442);
+            uint16_t xor_port = ((uint16_t *)response_attribute_location)[3];
+            nat_addr_holder.sin_port = (xor_port ^ ((uint16_t) stun_magic_cookie));
+            uint32_t xor_addr = ((uint32_t *)response_attribute_location)[2];
+            // TODO: EXTREMELY WEIRD SHIFTING LOGIC... NEED FURTHER INSPECTION...
+            nat_addr_holder.sin_addr.s_addr = (xor_addr ^ stun_magic_cookie);
+            getnameinfo((struct sockaddr *)(&nat_addr_holder), addr_len, hostname_holder, HOSTNAME_HOLDER_SIZE, NULL, 0, NI_NUMERICHOST);
+            printf("FOUND IPv4 XOR-MAPPED-ADDRESS:\nNAT IP: %s, NAT PORT: %hu\n", hostname_holder, ntohs(nat_addr_holder.sin_port));
           }
           else {
-            puts("FOUND irrelevant attribute...");
+            // puts("FOUND irrelevant attribute...");
           }
           index += (attribute_length + 4); // +4 for attribute header length
-          printf("After incrementing, index=%hu\n", index);
+          // printf("After incrementing, index=%hu\n", index);
         }
       } 
       else if (((uint16_t *)response_buffer)[0] == htons(0x0111)) {
@@ -138,9 +156,7 @@ void build_binding_request() {
   uint16_t stun_type = htons(0x0001);
   uint16_t stun_length = htons(0x0000);
   uint32_t stun_magic_cookie = htonl(0x2112A442);
-
   // TODO: build randomized transaction ID?
-
   memmove(request_buffer, &stun_type, 2);
   memmove(request_buffer + 2, &stun_length, 2);
   memmove(request_buffer + 4, &stun_magic_cookie, 4);
