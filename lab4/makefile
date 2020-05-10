@@ -6,17 +6,23 @@
 
 CC = gcc
 CFLAGS = -std=c11 -Wall
-ALL = stun_client
+ALL = stun_symmetry stun_cone_level
 
 .PHONY: test clean
 
 all: $(ALL)
 
-stun_client: stun_client.c
-	@$(CC) $(CFLAGS) -o stun_client stun_client.c -lpthread
+stun_symmetry: stun_symmetry.c
+	@$(CC) $(CFLAGS) -o stun_symmetry stun_symmetry.c -lpthread
 
-test: stun_client
-	@./stun_client
+stun_cone_level: stun_cone_level.c
+	@$(CC) $(CFLAGS) -o stun_cone_level stun_cone_level.c -lpthread
+
+test_symmetry: stun_symmetry
+	@./stun_symmetry
+
+test_cone_level: stun_cone_level
+	@./stun_cone_level
 
 clean:
 	@rm -f $(ALL)

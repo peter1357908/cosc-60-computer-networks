@@ -1,4 +1,5 @@
 /* STUN client for the STUN NAT-detector module
+ * tests if the user is behind a symmetric NAT
  *	
  * For Dartmouth COSC 60 Lab 4;
  * By Shengsong Gao, May 2020.
@@ -36,9 +37,6 @@ unsigned int addr_len = (unsigned int) sizeof(struct sockaddr_in);
 int client_sockfd;
 char request_buffer[STUN_BUFFER_SIZE] = {0};
 
-int should_close = 0;
-pthread_mutex_t should_close_lock;
-
 /****** main ******/
 int main() {
   // open up a socket
@@ -73,6 +71,7 @@ int main() {
   send_request_to("stun4.l.google.com", 19302);
 
   pthread_join(response_handler_thread, NULL);
+  close(client_sockfd);
 
   return 0;
 }
@@ -156,7 +155,7 @@ void build_binding_request() {
   uint16_t stun_type = htons(0x0001);
   uint16_t stun_length = htons(0x0000);
   uint32_t stun_magic_cookie = htonl(0x2112A442);
-  // TODO: build randomized transaction ID?
+
   memmove(request_buffer, &stun_type, 2);
   memmove(request_buffer + 2, &stun_length, 2);
   memmove(request_buffer + 4, &stun_magic_cookie, 4);
@@ -189,16 +188,3 @@ void send_request_to(const char *text_addr, uint16_t port_number) {
   }
   freeaddrinfo(info_p);
 }
-
-
-// otherwise we could do something like this...
-//
-// stun_server_addr.sin_family = AF_INET; 
-// stun_server_addr.sin_port = htons(19302);
-// if (inet_pton(AF_INET, "74.125.204.127", &(stun_server_addr.sin_addr)) != 1) {
-//   perror("inet_pton() failed\n");
-//   return -1;
-// }
-//
-// now get it back and print it
-// inet_ntop(AF_INET, &(stun_server_addr.sin_addr), str, INET_ADDRSTRLEN);
