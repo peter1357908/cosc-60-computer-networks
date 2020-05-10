@@ -184,7 +184,7 @@ void *response_handler(void *_nil) {
 
 void build_port_spoof() {
   uint16_t stun_type = htons(0x0001);
-  uint16_t stun_length = htons(0x0000);
+  uint16_t stun_length = htons(0x0008);
   uint32_t stun_magic_cookie = htonl(0x2112A442);
   uint32_t stun_change_request_header = htonl(0x00030004); // type 3, size 4
   uint32_t stun_change_request_attribute = htonl(0x00000002); // type 010, port-only
@@ -198,7 +198,7 @@ void build_port_spoof() {
 
 void build_both_spoof() {
   uint16_t stun_type = htons(0x0001);
-  uint16_t stun_length = htons(0x0000);
+  uint16_t stun_length = htons(0x0008);
   uint32_t stun_magic_cookie = htonl(0x2112A442);
   uint32_t stun_change_request_header = htonl(0x00030004); // type 3, size 4
   uint32_t stun_change_request_attribute = htonl(0x00000006); // type 110, both
