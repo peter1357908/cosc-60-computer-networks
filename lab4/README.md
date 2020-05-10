@@ -25,6 +25,8 @@ Then, after running `make test_cone_level`, there are at least the following cas
 
 I am apparently behind a "Port Restricted Cone NAT" - I have a static mapped address, but any external host can send a packet to me (at that address) ONLY IF I have sent a packet to that external host at the exact IP address AND the exact port before.
 
+The result of following in the procedures in the last section can be found in the Wireshark captures also in this folder.
+
 ### Was I able to receive a UDP packet from a fellow student? From which student(s) have I tried?
 
 No; I have not attempted UDP communication with any fellow student.
