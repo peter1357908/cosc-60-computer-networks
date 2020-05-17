@@ -31,7 +31,7 @@ The result of following in the procedures in the last section can be found in th
 
 No; I have not attempted UDP communication with any fellow student.
 
-### What is your timezone and do you have preferences for final-project group members? (I'll use this info to make final project groups: first I group according to preference, then to timezone, then to programming language)
+### My timezone and preferences for final-project group members:
 
 I am in Central Time right now and will remain so for the rest of the term.
 
